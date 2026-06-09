@@ -27,6 +27,5 @@ wiki/health-report.md
 # 本地配置
 config.local.json
 
-raw/*
 .vscode/
 .obsidian/
