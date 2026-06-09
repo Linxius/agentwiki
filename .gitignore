@@ -1,0 +1,32 @@
+# Python 缓存
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# OS 文件
+.DS_Store
+Thumbs.db
+
+# 生成的图表数据
+graph/graph.json
+graph/graph.html
+graph/graph-report.md
+
+# Wiki 生成的内容
+wiki/sources/*.md
+wiki/entities/*.md
+wiki/concepts/*.md
+wiki/syntheses/
+wiki/lint-report.md
+wiki/health-report.md
+
+# 本地配置
+config.local.json
+
+raw/*
+.vscode/
+.obsidian/
