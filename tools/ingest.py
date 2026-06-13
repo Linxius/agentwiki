@@ -63,6 +63,72 @@ def read_file(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def extract_url_from_file(source: Path, source_content: str) -> str | None:
+    """Extract original source URL from raw file frontmatter or content.
+
+    Priority:
+    1. YAML frontmatter url: field
+    2. arXiv ID in filename (e.g. 2301.12345)
+    3. http URL in first 30 lines of content
+    Returns None if nothing found.
+    """
+    fmatch = re.match(r'^---\s*\n(.*?)\n---\s*\n', source_content, re.DOTALL)
+    if fmatch:
+        frontmatter = fmatch.group(1)
+        url_match = re.search(r'^url:\s*(.+)$', frontmatter, re.MULTILINE)
+        if url_match:
+            url = url_match.group(1).strip().strip('"').strip("'")
+            if url:
+                return url
+
+    arxiv_match = re.search(r'(\d{4}\.\d{4,5})(v\d+)?', source.stem)
+    if arxiv_match:
+        return f'https://arxiv.org/abs/{arxiv_match.group(1)}'
+
+    lines = source_content.split('\n')
+    for line in lines[:30]:
+        urls = re.findall(r'https?://[^\s\)\]>"]+', line)
+        for url in urls:
+            if not any(skip in url for skip in ['example.com', 'localhost']):
+                return url.rstrip('.,;')
+
+    return None
+
+
+def inject_source_url(file_path: Path, source_url: str):
+    """Inject source_url into file's YAML frontmatter as url: field.
+
+    If file already has YAML frontmatter, add/update url: field.
+    If no frontmatter, prepend one with url: field.
+    """
+    if not source_url or source_url == file_path.as_posix():
+        return
+
+    content = read_file(file_path)
+    fmatch = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+
+    if fmatch:
+        frontmatter = fmatch.group(1)
+        rest = content[fmatch.end():]
+
+        if re.search(r'^url:\s*', frontmatter, re.MULTILINE):
+            frontmatter = re.sub(
+                r'^url:\s*.*$',
+                f'url: {source_url}',
+                frontmatter,
+                flags=re.MULTILINE,
+            )
+        else:
+            first_nl = frontmatter.index('\n') + 1 if '\n' in frontmatter else len(frontmatter)
+            frontmatter = frontmatter[:first_nl] + f'url: {source_url}\n' + frontmatter[first_nl:]
+
+        new_content = f'---\n{frontmatter}\n---\n{rest}'
+    else:
+        new_content = f'---\nurl: {source_url}\n---\n{content}'
+
+    file_path.write_text(new_content, encoding='utf-8')
+
+
 def call_llm(prompt: str, max_tokens: int = 8192) -> str:
     try:
         from litellm import completion
@@ -439,6 +505,27 @@ def ingest(source_path: str, auto_convert: bool = True):
     source_hash = sha256(source_content)
     today = date.today().isoformat()
 
+    # Resolve original source URL
+    source_url = extract_url_from_file(source, source_content)
+    if not source_url:
+        print(f"  ⚠️  未找到原始出处 URL")
+        user_url = input(f"  请输入「{source.name}」的原始出处 URL（留空跳过）: ").strip()
+        if user_url:
+            source_url = user_url
+            inject_source_url(source, source_url)
+            print(f"  ✅ URL 已写入文件 frontmatter")
+
+    raw_relative_path = os.path.relpath(
+        str(source), str(WIKI_DIR / "sources")
+    ).replace('\\', '/')
+    source_file_repo = str(source.relative_to(REPO_ROOT)).replace('\\', '/')
+    source_url_display = source_url or "(not found)"
+    url_instruction = (
+        f'- Set frontmatter `url:` to "{source_url}".'
+        if source_url else
+        '- If no source_url is available, set frontmatter `url:` to "" (empty string).'
+    )
+
     print(f"\nIngesting: {source.name}  (hash: {source_hash})")
 
     wiki_context = build_wiki_context()
@@ -452,12 +539,24 @@ Schema and conventions:
 Current wiki state (index + recent pages):
 {wiki_context if wiki_context else "(wiki is empty — this is the first source)"}
 
-New source to ingest (file: {source.relative_to(REPO_ROOT) if source.is_relative_to(REPO_ROOT) else source.name}):
+New source to ingest (file: {source_file_repo}):
+source_file (repo-relative): {source_file_repo}
+raw_relative_path: {raw_relative_path} (use this path from wiki/sources/<slug>.md to the raw file in the "## 原始出处" section)
+source_url: {source_url_display}
+
 === SOURCE START ===
 {source_content}
 === SOURCE END ===
 
 Today's date: {today}
+
+IMPORTANT source_page instructions:
+- Use the source page format from the schema matching the file path (paper/article/book/etc).
+- Set frontmatter `source_file:` to "{source_file_repo}".
+- {url_instruction}
+- Include a "## 原始出处" section after Summary with:
+  - 原始文件: [{source_file_repo}]({raw_relative_path}) — relative link to raw file
+  - 原文链接: [{{url}}]({{url}}) — original source URL (if available)
 
 Return ONLY a valid JSON object with these fields (no markdown fences, no prose outside the JSON):
 {{
@@ -608,9 +707,16 @@ def run_from_daily(date_str: str = None):
                 next_i += 1
             
             if re.search(r'\[x\]\s*合入 wiki|\[X\]\s*合入 wiki', '\n'.join(entry_lines)):
-                # Extract file name from the entry (we'll look for it in sources/)
+                # Extract source URL from entry
+                source_url = ''
+                for el in entry_lines:
+                    m = re.match(r'- 来源:\s*(.*)', el)
+                    if m:
+                        source_url = m.group(1).strip()
+                        break
                 entries.append({
                     'title': title,
+                    'source_url': source_url,
                 })
             
             i = next_i
@@ -687,6 +793,10 @@ def run_from_daily(date_str: str = None):
         # Move file to category directory
         shutil.move(str(file_path), str(dest_path))
         print(f"  移动: {dest_path.relative_to(REPO_ROOT)}")
+
+        # Inject source URL into the file before ingest
+        if entry.get('source_url'):
+            inject_source_url(dest_path, entry['source_url'])
         
         # Run actual ingest
         ingest(str(dest_path), auto_convert=True)

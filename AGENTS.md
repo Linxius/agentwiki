@@ -193,11 +193,14 @@ Steps (in order):
 2. **Book splitting** (if source is under `raw/books/`):
    - **If source is a directory** (Form B): skip splitting, use existing chapter files under `sourceFile/`.
    - **If source is a single file** (Form A): split into chapters by scanning `##` or `#` heading boundaries. Generate `raw/books/<slug>/sourceFile/ch-<NN>-<topic>.md` files. Delete the original single file after splitting. Then continue with directory mode.
-3. Read the source document fully
+3. Read the source document fully — extract original URL (from `url:` frontmatter, arXiv ID in filename, or URLs in content). If none found, ask the user to provide one.
 4. Read `wiki/index.md` and `wiki/overview.md` for current wiki context
 5. Write source page(s):
    - **For books (Form B)**: write `wiki/sources/<book-slug>/overview.md` (overview page) + `wiki/sources/<book-slug>/ch-<NN>-<topic>.md` (one per chapter). Use the Book Directory Template.
    - **For all other sources**: write `wiki/sources/<slug>.md` using the appropriate source-type template.
+   - Set `source_file` frontmatter to the repo-relative raw file path (e.g. `raw/papers/foo.pdf`).
+   - Set `url` frontmatter to the original source URL (if available, else `""`).
+   - In the body, include a `## 原始出处` section with both the raw file link and the original URL.
 6. **Download images** — scan source pages for external image URLs (`http://`, `https://`, `data:image/`), download to `wiki/images/<slug>/`, and update paths to `../images/<slug>/filename`. For books, use `wiki/images/<book-slug>/ch<N>/`.
 7. Update `wiki/index.md` — add entry under Sources section. For books (Form B), add only one link to the overview page (e.g., `- [Book Title](sources/<book-slug>/overview.md)`).
 8. Update `wiki/overview.md` — revise synthesis if warranted
@@ -233,11 +236,16 @@ type: source
 tags: []
 date: YYYY-MM-DD
 source_file: raw/...
+url: ""           # 原始出处 URL
 links: []         # 代码或项目链接
 ---
 
 ## Summary
 2–4 sentence summary.
+
+## 原始出处
+- 原始文件: [{source_file}]({source_file}) （相对于 source 页面的路径）
+- 原文链接: [{url}]({url})
 
 ## Key Points
 - Point 1
@@ -266,6 +274,7 @@ type: source
 tags: [paper]
 date: YYYY-MM-DD
 source_file: raw/papers/...
+url: ""           # 原始出处 URL（arxiv、doi、项目页等）
 venue: ""          # 会议或期刊名，如 CVPR 2025
 published: YYYY    # 发表年份
 links: []          # 代码或项目链接
@@ -273,6 +282,10 @@ links: []          # 代码或项目链接
 
 ## Summary
 2–4 句概述论文解决的问题、核心方法和主要贡献。
+
+## 原始出处
+- 原始文件: [{source_file}](../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Key Contributions
 - Contribution 1
@@ -324,10 +337,15 @@ type: source
 tags: [article]
 date: YYYY-MM-DD
 source_file: raw/articles/...
+url: ""           # 原始出处 URL（博客、新闻、教程等）
 ---
 
 ## Summary
 2–4 sentence summary.
+
+## 原始出处
+- 原始文件: [{source_file}](../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Key Points
 - Point 1
@@ -361,10 +379,15 @@ type: source
 tags: [book]
 date: YYYY-MM-DD
 source_file: raw/books/...
+url: ""           # 原始出处 URL（如有）
 ---
 
 ## Summary
 2–4 sentence summary of the book.
+
+## 原始出处
+- 原始文件: [{source_file}](../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Structure
 - Chapter N: [Title] — key idea
@@ -390,10 +413,15 @@ type: source
 tags: [book]
 date: YYYY-MM-DD
 source_file: raw/books/<book>/
+url: ""           # 原始出处 URL（如有）
 ---
 
 ## Summary
 2–4 sentence summary of the book.
+
+## 原始出处
+- 原始文件: [{source_file}](../../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Chapters
 - [[Ch01Introduction|Ch1: Introduction]]
@@ -418,11 +446,16 @@ type: source
 tags: [book-chapter]
 date: YYYY-MM-DD
 source_file: raw/books/<book>/sourceFile/...
+url: ""           # 原始出处 URL（如有）
 book: "Book Title"
 ---
 
 ## Summary
 2–4 sentence summary of the chapter.
+
+## 原始出处
+- 原始文件: [{source_file}](../../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Key Points
 - Point 1
@@ -444,11 +477,16 @@ type: source
 tags: [dataset]
 date: YYYY-MM-DD
 source_file: raw/datasets/...
+url: ""           # 原始出处 URL（数据集页面）
 code_url: ""
 ---
 
 ## Summary
 2–4 sentence description.
+
+## 原始出处
+- 原始文件: [{source_file}](../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Statistics
 - Size: ...
@@ -477,10 +515,15 @@ type: source
 tags: [doc]
 date: YYYY-MM-DD
 source_file: raw/docs/...
+url: ""           # 原始出处 URL（如有）
 ---
 
 ## Summary
 2–4 sentence summary.
+
+## 原始出处
+- 原始文件: [{source_file}](../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Architecture / Design
 核心架构概述、技术选型、模块划分和数据流。
@@ -511,11 +554,16 @@ type: source
 tags: [project]
 date: YYYY-MM-DD
 source_file: raw/projects/...
+url: ""           # 原始出处 URL（项目页面、博客等）
 code_url: ""
 ---
 
 ## Summary
 2–4 sentence description.
+
+## 原始出处
+- 原始文件: [{source_file}](../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Goals & Motivation
 
@@ -545,10 +593,15 @@ type: source
 tags: [talk]
 date: YYYY-MM-DD
 source_file: raw/talks/...
+url: ""           # 原始出处 URL（视频页面、幻灯片等）
 ---
 
 ## Summary
 2–4 sentence summary.
+
+## 原始出处
+- 原始文件: [{source_file}](../../{source_file})
+- 原文链接: [{url}]({url})
 
 ## Key Points
 - Point 1

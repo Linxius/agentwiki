@@ -372,6 +372,41 @@ def generate_new_brief():
     write_file(BRIEF_FILE, content)
 
 
+def inject_source_url(file_path: Path, source_url: str):
+    """Inject source_url into file's YAML frontmatter as url: field.
+
+    If file already has YAML frontmatter, add/update url: field.
+    If no frontmatter, prepend one with url: field.
+    Skips if source_url is empty or is just the file path itself.
+    """
+    if not source_url or source_url == file_path.as_posix():
+        return
+
+    content = read_file(file_path)
+    fmatch = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+
+    if fmatch:
+        frontmatter = fmatch.group(1)
+        rest = content[fmatch.end():]
+
+        if re.search(r'^url:\s*', frontmatter, re.MULTILINE):
+            frontmatter = re.sub(
+                r'^url:\s*.*$',
+                f'url: {source_url}',
+                frontmatter,
+                flags=re.MULTILINE,
+            )
+        else:
+            first_nl = frontmatter.index('\n') + 1 if '\n' in frontmatter else len(frontmatter)
+            frontmatter = frontmatter[:first_nl] + f'url: {source_url}\n' + frontmatter[first_nl:]
+
+        new_content = f'---\n{frontmatter}\n---\n{rest}'
+    else:
+        new_content = f'---\nurl: {source_url}\n---\n{content}'
+
+    file_path.write_text(new_content, encoding='utf-8')
+
+
 def move_file_to_daily(file_path: Path, date_str: str):
     """Move file to daily/YYYY-MM-DD/sources/."""
     dest_dir = DAILY_DIR / date_str / "sources"
@@ -434,9 +469,18 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     results = []
     for file_path in files:
         print(f"  分析: {file_path.name}")
-        result = analyze_file(file_path, interests)
-        results.append(result)
-        print(f"    → {result['match_level']} ({result['suggested_category']})")
+        file_results = analyze_file(file_path, interests)
+        for r in file_results:
+            results.append(r)
+            print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
+
+    # Inject source URL into each file's frontmatter before moving
+    injected = set()
+    for r in results:
+        fp = r['file']
+        if fp not in injected and r.get('source_url'):
+            inject_source_url(fp, r['source_url'])
+            injected.add(fp)
 
     # Sort results: interested > possibly_interested > not_interested
     priority = {"interested": 0, "possibly_interested": 1, "not_interested": 2}
