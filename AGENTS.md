@@ -25,6 +25,7 @@ Describe what you want in plain English or use shorthand triggers:
 | `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
 | `合入 wiki` / `ingest from digest` | 将 digest 中勾选条目合入 wiki |
 | `ingest <file>` | 直接合入单个文件到 wiki |
+| `status` / `流程状态` | 检查各流程节点状态并建议下一步 |
 
 ### Maintenance Triggers
 
@@ -49,6 +50,32 @@ The agent should proactively detect and remind about:
 - **Pending deep-read**: brief.md 有 `[x] 深度阅读` 但未生成报告
 - **Pending ingest**: brief.md 有 `[x] 合入 wiki` 但未处理
 - **After filter completes**: "筛选完成！请阅读 brief.md 确认"
+
+### Status Auto-Detect
+
+When user triggers `status` / `流程状态`, the agent checks:
+
+| 检查点 | 读什么 | 判断 |
+|---|---|---|
+| inbox.md 链接 | `raw/inbox/inbox.md` | 统计 markdown 链接数 |
+| inbox/ 待筛选 | `raw/inbox/` 下日期目录 | 统计 .md 文件数，排除已处理的 |
+| brief 最近简报 | `raw/digest/brief.md` | 是否存在、是否有内容 |
+| 待深度阅读 | `raw/digest/brief.md` | 扫描 `[x] 深度阅读` 条目 |
+| 待合入 wiki | `raw/digest/brief.md` | 扫描 `[x] 合入 wiki` 条目 |
+| feeds 上次拉取 | `raw/.feeds-state.json` | 读取各源 `last_fetch_date` |
+
+输出格式示例：
+```
+📋 Pipeline Status:
+1. inbox: 3 links in inbox.md
+2. inbox: 15 files pending filter
+3. brief: 2026-06-14 简报已生成
+4. deep-read: 2 checked, 0 done
+5. ingest: 1 checked, 0 done
+6. feeds: 上次拉取 2026-06-14（1天前）
+
+→ 建议: 处理 inbox → filter → 生成深度阅读 → 合入 wiki
+```
 
 ## Brief.md Format
 
