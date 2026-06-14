@@ -391,9 +391,13 @@ def move_source(file_path: Path, date_str: str):
 def clear_inbox(skip_rel_paths: set[str] | None = None):
     """Clear inbox/ directory (keep inbox.md, empty its content). Keep files in skip_rel_paths."""
     if not INBOX_DIR.exists():
-        return
+        INBOX_DIR.mkdir(parents=True, exist_ok=True)
     inbox_files = list(INBOX_DIR.iterdir())
     if not inbox_files:
+        # Ensure inbox.md exists even if dir is empty
+        inbox_md = INBOX_DIR / "inbox.md"
+        if not inbox_md.exists():
+            inbox_md.write_text("# Inbox\n", encoding="utf-8")
         print("  inbox/ 已为空。")
         return
 
@@ -418,6 +422,11 @@ def clear_inbox(skip_rel_paths: set[str] | None = None):
         count += 1
     if count:
         print(f"  ✅ 已清空 inbox/ ({count} 个文件)")
+
+    # Ensure inbox.md exists
+    inbox_md_path = INBOX_DIR / "inbox.md"
+    if not inbox_md_path.exists() or inbox_md_path.read_text(encoding="utf-8").strip() != "# Inbox":
+        inbox_md_path.write_text("# Inbox\n", encoding="utf-8")
 
 
 def append_log(entry: str):
