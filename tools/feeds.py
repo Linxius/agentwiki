@@ -31,7 +31,11 @@ def today_str():
 
 
 def yesterday_str():
-    return (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    """Return most recent weekday (Mon-Fri). arXiv doesn't publish on weekends."""
+    d = datetime.now(timezone.utc) - timedelta(days=1)
+    if d.weekday() >= 5:
+        d -= timedelta(days=d.weekday() - 4)
+    return d.strftime("%Y-%m-%d")
 
 
 def arxiv_date_param(d):

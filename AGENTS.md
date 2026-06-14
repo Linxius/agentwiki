@@ -19,7 +19,7 @@ Describe what you want in plain English or use shorthand triggers:
 | `feeds` / `拉取 feeds` | 从配置的源拉取新内容到 inbox/ |
 | `inbox` / `处理 inbox` | 解析 inbox.md 链接 → 生成 .md 到 inbox/ |
 | `filter` / `开始筛选` | 筛选 inbox/ → 生成 digest/brief.md |
-| `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
+| `deep read` / `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
 | `合入 wiki` / `ingest from digest` | 将 digest 中勾选条目合入 wiki |
 | `ingest <file>` | 直接合入单个文件到 wiki |
 | `status` / `流程状态` | 检查各流程节点状态并建议下一步 |
