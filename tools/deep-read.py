@@ -8,13 +8,13 @@ Usage:
     python tools/deep-read.py --file filename.md  # process single file
 
 Flow:
-    1. Read raw/daily/brief.md to find files marked "[x] 深度阅读"
+    1. Read raw/digest/brief.md to find files marked "[x] 深度阅读"
     2. For each checked file, call LLM to generate 1500-3000 word deep-dive report
-    3. Save report to raw/daily/YYYY-MM-DD/deepdive-<filename>.md
+    3. Save report to raw/digest/YYYY-MM-DD/deepdive-<filename>.md
     4. Update brief.md status
 
 Output:
-    - raw/daily/YYYY-MM-DD/deepdive-*.md  — deep-dive reading report
+    - raw/digest/YYYY-MM-DD/deepdive-*.md  — deep-dive reading report
 """
 
 import re
@@ -29,7 +29,7 @@ from collections import defaultdict
 import os
 
 REPO_ROOT = Path(__file__).parent.parent
-DAILY_DIR = REPO_ROOT / "raw" / "daily"
+DAILY_DIR = REPO_ROOT / "raw" / "digest"
 BRIEF_FILE = DAILY_DIR / "brief.md"
 
 
@@ -325,7 +325,7 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
         safe_title = ''.join(c if c.isalnum() or c in '-_' else '_' for c in title)
         deepdive_path = DAILY_DIR / today / "deepdive" / f"deepdive-{safe_title}.md"
         if 'sources' in str(file_path):
-            source_date = str(file_path).split('daily/')[1].split('/')[0]
+            source_date = str(file_path).split('digest/')[1].split('/')[0]
             deepdive_path = DAILY_DIR / source_date / "deepdive" / f"deepdive-{safe_title}.md"
 
         deepdive_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,31 +1,55 @@
-# Python 缓存
+# === Python 缓存 ===
 __pycache__/
-*.pyc
+*.py[cod]
+*.$py.class
 .venv/
 venv/
+venv-bak/
 dist/
 build/
 *.egg-info/
 
-# OS 文件
+# === OS 文件 ===
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*~
 
-# 生成的图表数据
+# === 运行时状态 ===
+raw/.feeds-state.json
+
+# === 旧路径（已废弃） ===
+raw/daily/
+
+# === 自动生成的 wiki 内容 ===
+wiki/sources/
+wiki/entities/
+wiki/concepts/
+wiki/syntheses/
+wiki/images/
+wiki/lint-report.md
+wiki/health-report.md
+wiki/archived/
+
+# === 自动生成的图谱数据 ===
 graph/graph.json
 graph/graph.html
 graph/graph-report.md
 
-# Wiki 生成的内容
-wiki/sources/*.md
-wiki/entities/*.md
-wiki/concepts/*.md
-wiki/syntheses/
-wiki/lint-report.md
-wiki/health-report.md
+# === 自动生成的简报/源文件 ===
+raw/digest/brief/
+raw/digest/deepdive/
+raw/digest/sources/
 
-# 本地配置
+# === 下载的二进制文件（已转为 .md）===
+raw/**/*.pdf
+raw/**/*.pptx
+raw/**/*.docx
+raw/**/*.xlsx
+raw/**/*.html
+
+# === 本地配置 ===
 config.local.json
-
 .vscode/
 .obsidian/

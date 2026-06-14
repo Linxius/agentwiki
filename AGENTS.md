@@ -13,35 +13,42 @@ Alternatively, you can use the script-based ingest (requires `litellm` + LLM API
 
 ## How to Use
 
-Describe what you want in plain English:
-- *"Ingest this file: raw/papers/my-paper.md"*
-- *"What does the wiki say about transformer models?"*
-- *"Check the wiki for orphan pages and contradictions"*
-- *"Build the knowledge graph"*
+Describe what you want in plain English or use shorthand triggers:
 
-Or use shorthand triggers:
-- `filter` → runs the Filter Workflow (scan raw/inbox/ based on interests)
-- `ingest <file>` → runs the Ingest Workflow (auto-converts PDF via pdf2md.py)
-- `ingest from daily YYYY-MM-DD` → runs Ingest from daily brief
-- `query: <question>` → runs the Query Workflow
-- `health` → runs the Health Workflow (fast, every session)
-- `lint` → runs the Lint Workflow (expensive, periodic)
-- `build graph` → runs the Graph Workflow
+### Pipeline Triggers
+
+| 触发词 | 动作 |
+|---|---|
+| `feeds` / `拉取 feeds` | 从配置的源拉取新内容到 inbox/ |
+| `inbox` / `处理 inbox` | 解析 inbox.md 链接 → 生成 .md 到 inbox/ |
+| `filter` / `开始筛选` | 筛选 inbox/ → 生成 digest/brief.md |
+| `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
+| `合入 wiki` / `ingest from digest` | 将 digest 中勾选条目合入 wiki |
+| `ingest <file>` | 直接合入单个文件到 wiki |
+
+### Maintenance Triggers
+
+| 触发词 | 动作 |
+|---|---|
+| `health` | 结构完整性检查（快速，无 LLM） |
+| `lint` | 内容质量检查（慢，需要 LLM） |
+| `build graph` | 构建知识图谱 |
+
+### Query Triggers
+
+| 触发词 | 动作 |
+|---|---|
+| `query: <question>` | 基于 wiki 内容回答 |
+| *plain question* | 描述需求，如 "ingest this file: raw/papers/...md" |
 
 ### Agent Proactive Reminders
 
 The agent should proactively detect and remind about:
-- **inbox.md has links**: Alert user "inbox.md 中有 N 个链接待处理" when links are added
-- **New files in inbox/**: Alert user "今日有 N 份文件待筛选" when files are added
-- **Pending deep-read**: When brief.md has `[x] 深度阅读` but no deepdive report yet
-- **Pending ingest**: When brief.md has `[x] 合入 wiki` but not yet processed
-- **After filter completes**: "筛选完成！报告已生成，请阅读 brief.md 确认"
-
-User can also trigger actions directly:
-- "处理 inbox" → agent runs inbox.py to process links
-- "开始筛选" → agent runs filter
-- "生成深度阅读" → agent generates deepdive for checked entries
-- "合入 wiki" → agent processes ingested entries from daily/
+- **inbox.md has links**: "inbox.md 中有 N 个链接待处理"
+- **New files in inbox/**: "今日有 N 份文件待筛选"
+- **Pending deep-read**: brief.md 有 `[x] 深度阅读` 但未生成报告
+- **Pending ingest**: brief.md 有 `[x] 合入 wiki` 但未处理
+- **After filter completes**: "筛选完成！请阅读 brief.md 确认"
 
 ## Brief.md Format
 
@@ -75,7 +82,7 @@ User can also trigger actions directly:
 raw/          # Source documents
   inbox/      # Pending filter — new materials arrive here
     inbox.md  # User adds links here (arXiv IDs, URLs), processed by tools/inbox.py
-  daily/      # Daily briefings and deep-read reports
+  digest/     # Digest of filtered results
     brief.md  # Today's brief report with entries sorted by interest match
     YYYY-MM-DD/
       deepdive-*.md  # Deep-dive reading reports (generated after user confirmation)
@@ -105,9 +112,9 @@ tools/        # Standalone Python scripts
   health.py   # Structural checks (deterministic, no LLM calls)
   lint.py     # Content quality checks (uses LLM for semantic analysis)
   build_graph.py  # Knowledge graph generation
-  filter.py   # Filter and classify raw/inbox/ files → generates raw/daily/brief.md
+  filter.py   # Filter and classify raw/inbox/ files → generates raw/digest/brief.md
   deep-read.py  # Generate deep-dive reports from checked brief entries
-  ingest.py   # Ingest source documents into wiki (supports --from-daily)
+  ingest.py   # Ingest source documents into wiki (supports --from-digest)
 ```
 
 ## Link Inbox → Filter → Deep Read → Ingest Workflow
@@ -145,16 +152,16 @@ Steps:
    - Generate detailed report (500-800 words in Chinese)
    - Match against interests: `interested` / `possibly_interested` / `not_interested`
    - Suggest category (papers/articles/talks/books/docs/projects/datasets)
-4. Generate `raw/daily/brief.md` with entries sorted by match level
+4. Generate `raw/digest/brief.md` with entries sorted by match level
    - Each entry includes: title, source URL, matched interests, brief (3-5 sentences), detailed report (500-800 words), checkboxes for [ ] 深度阅读 and [ ] 合入 wiki
    - Entries grouped by match level: `[感兴趣]` → `[可能感兴趣]` → `[不感兴趣]`
-5. Move processed files to `raw/daily/YYYY-MM-DD/sources/`
-6. Archive current brief.md to `raw/daily/brief/YYYY-MM-DD.md`
+5. Move processed files to `raw/digest/YYYY-MM-DD/sources/`
+6. Archive current brief.md to `raw/digest/brief/YYYY-MM-DD.md`
 7. Clear inbox/
 
 ### User: Read brief.md
 
-User reviews `raw/daily/brief.md`, reads brief + detailed report for each entry. Decides which to deep-read and which to ingest into wiki.
+User reviews `raw/digest/brief.md`, reads brief + detailed report for each entry. Decides which to deep-read and which to ingest into wiki.
 
 - [ ] 深度阅读 — user checks if they want a deep-dive report (~1500-3000 words)
 - [ ] 合入 wiki — user checks if they want to ingest into wiki
@@ -171,15 +178,15 @@ Steps:
    - Key data/insights interpretation
    - Comparison with related fields
    - Potential issues/limitations
-3. Save report to `raw/daily/YYYY-MM-DD/deepdive-<filename>.md`
+3. Save report to `raw/digest/YYYY-MM-DD/deepdive-<filename>.md`
 
 ### Stage 3: Ingest to Wiki
 
-Triggered by: *"ingest from daily"* or `python tools/ingest.py --from-daily YYYY-MM-DD`
+Triggered by: *"ingest from digest"* or `python tools/ingest.py --from-digest YYYY-MM-DD`
 
 Steps:
 1. Read brief.md to find entries marked `[x] 合入 wiki`
-2. Find corresponding files in `daily/YYYY-MM-DD/sources/`
+2. Find corresponding files in `digest/YYYY-MM-DD/sources/`
 3. Show list to user for category confirmation
 4. Move files to appropriate category directory (raw/{papers,articles,...}/)
 5. Run ingest() for each file (follows existing Ingest Workflow)

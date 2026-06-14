@@ -660,8 +660,8 @@ Return ONLY a valid JSON object with these fields (no markdown fences, no prose 
     print()
 
 
-def run_from_daily(date_str: str = None):
-    """Process files from daily/YYYY-MM-DD/brief.md marked for wiki ingest.
+def run_from_digest(date_str: str = None):
+    """Process files from digest/YYYY-MM-DD/brief.md marked for wiki ingest.
     
     1. Read brief.md to find entries marked "[x] 合入 wiki"
     2. Show list to user for category confirmation
@@ -671,8 +671,8 @@ def run_from_daily(date_str: str = None):
     from datetime import date as _date
     today_str = _date.today().isoformat()
     
-    daily_dir = REPO_ROOT / "raw" / "daily"
-    brief_file = daily_dir / "brief.md"
+    digest_dir = REPO_ROOT / "raw" / "digest"
+    brief_file = digest_dir / "brief.md"
     
     if not brief_file.exists():
         print("brief.md not found. Run filter.py first.")
@@ -731,7 +731,7 @@ def run_from_daily(date_str: str = None):
     
     # Try to find files in sources/
     date_to_process = date_str or today_str
-    sources_dir = daily_dir / date_to_process / "sources"
+    sources_dir = digest_dir / date_to_process / "sources"
     
     processed_files = []
     for entry in entries:
@@ -841,26 +841,26 @@ if __name__ == "__main__":
 
     # Parse flags
     no_convert = "--no-convert" in sys.argv
-    from_daily = "--from-daily" in sys.argv
+    from_digest = "--from-digest" in sys.argv
     date_str = None
     
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     for i, arg in enumerate(sys.argv[1:]):
-        if arg == "--from-daily" and i+1 < len(sys.argv[1:]):
+        if arg == "--from-digest" and i+1 < len(sys.argv[1:]):
             next_arg = sys.argv[1:][i+1]
             if not next_arg.startswith("--") and len(next_arg) == 10:
                 date_str = next_arg
     
-    # Handle --from-daily mode
-    if from_daily:
-        print("Processing files from daily/ for wiki ingest...\n")
-        run_from_daily(date_str)
+    # Handle --from-digest mode
+    if from_digest:
+        print("Processing files from digest/ for wiki ingest...\n")
+        run_from_digest(date_str)
         sys.exit(0)
     
     if not args:
         print("Usage: python tools/ingest.py <path-to-source> [path2 ...] [dir1 ...]")
         print("       python tools/ingest.py --validate-only")
-        print("       python tools/ingest.py --from-daily [YYYY-MM-DD]  # ingest from daily brief")
+        print("       python tools/ingest.py --from-digest [YYYY-MM-DD]  # ingest from digest brief")
         print("       python tools/ingest.py --no-convert  # skip auto-conversion of non-.md files")
         print(f"\nSupported formats: {', '.join(sorted(ALL_SUPPORTED_EXTENSIONS))}")
         sys.exit(1)

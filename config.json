@@ -1,5 +1,16 @@
 {
   "output_language": "zh-CN",
   "output_language_name": "Chinese (Simplified)",
-  "description": "All wiki output should be written in the language specified above."
+  "description": "All wiki output should be written in the language specified above.",
+  "feeds": {
+    "sources": [
+      {
+        "name": "arxiv-cv-gr-cg",
+        "type": "arxiv",
+        "display_name": "arXiv cs.CV + cs.GR + cs.CG",
+        "categories": ["cs.CV", "cs.GR", "cs.CG"],
+        "enabled": true
+      }
+    ]
+  }
 }

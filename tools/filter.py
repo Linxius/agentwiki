@@ -11,15 +11,15 @@ Flow:
     2. Read wiki/interests.md
     3. Use LLM to generate brief summary (3-5 sentences) + detailed report (500-800 words)
     4. Match against interests (interested / possibly interested / not interested)
-    5. Generate raw/daily/brief.md with entries sorted by match level
-    6. Move files to raw/daily/YYYY-MM-DD/sources/
+    5. Generate raw/digest/brief.md with entries sorted by match level
+    6. Move files to raw/digest/YYYY-MM-DD/sources/
     7. Archive old brief.md entries
     8. Clear inbox/
 
 Output:
-    - raw/daily/brief.md             — current brief with sorted entries
-    - raw/daily/YYYY-MM-DD/          — file directories
-    - raw/daily/brief/YYYY-MM-DD.md  — archive of old brief
+    - raw/digest/brief.md             — current brief with sorted entries
+    - raw/digest/YYYY-MM-DD/          — file directories
+    - raw/digest/brief/YYYY-MM-DD.md  — archive of old brief
 """
 
 import re
@@ -35,7 +35,7 @@ import os
 
 REPO_ROOT = Path(__file__).parent.parent
 INBOX_DIR = REPO_ROOT / "raw" / "inbox"
-DAILY_DIR = REPO_ROOT / "raw" / "daily"
+DAILY_DIR = REPO_ROOT / "raw" / "digest"
 BRIEF_DIR = DAILY_DIR / "brief"
 BRIEF_FILE = DAILY_DIR / "brief.md"
 CATEGORIES = [
@@ -331,7 +331,7 @@ def generate_brief_entries(results: list[dict]) -> str:
 
 
 def archive_current_brief():
-    """Archive current brief.md to daily/brief/YYYY-MM-DD.md if it exists."""
+    """Archive current brief.md to digest/brief/YYYY-MM-DD.md if it exists."""
     today = date.today().isoformat()
     if BRIEF_FILE.exists():
         archive_path = BRIEF_DIR / f"{today}.md"
@@ -408,7 +408,7 @@ def inject_source_url(file_path: Path, source_url: str):
 
 
 def move_file_to_daily(file_path: Path, date_str: str):
-    """Move file to daily/YYYY-MM-DD/sources/."""
+    """Move file to digest/YYYY-MM-DD/sources/."""
     dest_dir = DAILY_DIR / date_str / "sources"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / file_path.name
@@ -499,7 +499,7 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
         # Write today's brief
         write_file(BRIEF_FILE, brief_content)
 
-        # Move files to daily/YYYY-MM-DD/sources/
+        # Move files to digest/YYYY-MM-DD/sources/
         today = date.today().isoformat()
         for item in results:
             print(f"  移动: {item['file'].name} → {today}/sources/")
