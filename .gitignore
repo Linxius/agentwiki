@@ -48,3 +48,4 @@ raw/digest/brief/*.md
 config.local.json
 .vscode/
 .obsidian/
+raw/.filter-failed.txt

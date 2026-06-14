@@ -791,7 +791,7 @@ def run_from_digest(date_str: str = None):
     
     # Try to find files in sources/
     date_to_process = date_str or today_str
-    sources_dir = digest_dir / date_to_process / "sources"
+    sources_dir = digest_dir / "sources" / date_to_process
     
     processed_files = []
     for entry in entries:

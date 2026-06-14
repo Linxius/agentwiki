@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate deep-dive reading reports for selected files.
+Generate deep-dive reading reports for selected files, and analyze disinterested entries.
 
 Usage:
     python tools/deep-read.py              # process all checked in brief.md
@@ -8,14 +8,17 @@ Usage:
     python tools/deep-read.py --file filename.md  # process single file
 
 Flow:
-    1. Read raw/digest/brief.md to find files marked "[x] 深度阅读"
-    2. For each checked file, call LLM to generate 1500-3000 word deep-dive report
+    1. Read raw/digest/brief.md
+    2a. Find entries marked "[x] 不感兴趣" → generate interests.md update suggestions
+    2b. Find entries marked "[x] 深度阅读" → generate deep-dive report
     3. Accumulate reports by date, save as raw/digest/YYYY-MM-DD/deepdive.md
     4. Images go to deepdive/ directory, prefixed by entry slug
+    5. Save disinterest suggestions as raw/digest/YYYY-MM-DD/disinterest-suggestions.md
 
 Output:
-    - raw/digest/YYYY-MM-DD/deepdive.md    — combined deep-dive report (一天一份)
-    - raw/digest/YYYY-MM-DD/deepdive/      — images (文件名: {slug}-figN.ext)
+    - raw/digest/YYYY-MM-DD/deepdive.md              — combined deep-dive report
+    - raw/digest/YYYY-MM-DD/deepdive/                — images
+    - raw/digest/YYYY-MM-DD/disinterest-suggestions.md — interests update suggestions
 """
 
 import re
@@ -248,21 +251,20 @@ def cleanup_deepdive_images(report_content, image_dir):
             f.unlink()
 
 
-def find_checked_entries(brief_content: str, date_str: str = None) -> list[dict]:
-    """Parse brief.md to find entries marked "[x] 深度阅读"."""
+def _parse_brief_entries(brief_content: str, date_str: str = None) -> list[dict]:
+    """Parse brief.md into entry dicts with metadata (shared parser)."""
+    HEADER = re.compile(r'^#{3,4} (.+)')
     entries = []
     lines = brief_content.split('\n')
 
     i = 0
     while i < len(lines):
         line = lines[i]
-        # Check if it's a section header for a file
-        if line.startswith('### ') and not line.startswith('### ['):
-            file_title = line[4:].strip()
+        header_match = HEADER.match(line)
+        if header_match and not line.lstrip().startswith('### ['):
+            file_title = header_match.group(1).strip()
 
-            # Check if it's within the specified date
             if date_str:
-                # Look back for date header
                 found_date = False
                 for j in range(max(0, i-10), i):
                     if date_str in lines[j]:
@@ -272,53 +274,109 @@ def find_checked_entries(brief_content: str, date_str: str = None) -> list[dict]
                     i += 1
                     continue
 
-            # Collect the entry's lines
             entry_lines = []
             next_i = i + 1
             while next_i < len(lines):
-                if lines[next_i].startswith('### ') and not lines[next_i].startswith('### ['):
+                if HEADER.match(lines[next_i]) and not lines[next_i].lstrip().startswith('### ['):
                     break
                 entry_lines.append(lines[next_i])
                 next_i += 1
 
             entry_text = '\n'.join(entry_lines)
 
-            # Check if "[x] 深度阅读" is present
-            if re.search(r'\[x\]\s*深度阅读|\[X\]\s*深度阅读', entry_text):
-                # Extract source URL and source file path
-                source_url = ''
-                url_match = re.search(r'- 来源:\s*(.+)', entry_text)
-                if url_match:
-                    source_url = url_match.group(1).strip()
+            source_url = ''
+            url_match = re.search(r'- 来源:\s*(.+)', entry_text)
+            if url_match:
+                source_url = url_match.group(1).strip()
 
-                source_path = ''
-                path_match = re.search(r'- 源文件:\s*(.+)', entry_text)
-                if path_match:
-                    source_path = path_match.group(1).strip()
+            source_path = ''
+            path_match = re.search(r'- 源文件:\s*(.+)', entry_text)
+            if path_match:
+                source_path = path_match.group(1).strip()
 
-                # Extract brief and detail report if available
-                brief = ''
-                brief_match = re.search(r'\*\*简介\*\*：(.+?)(?=\*\*详细报告\*\*|\n\n|$)', entry_text, re.DOTALL)
-                if brief_match:
-                    brief = brief_match.group(1).strip()
+            brief = ''
+            brief_match = re.search(r'\*\*简介\*\*：(.+?)(?=\*\*详细报告\*\*|\n\n|$)', entry_text, re.DOTALL)
+            if brief_match:
+                brief = brief_match.group(1).strip()
 
-                # Check if deepdive already exists
-                deepdive_existed = 'deepdive' in entry_text.lower()
+            has_deepread = bool(re.search(r'\[x\]\s*深度阅读|\[X\]\s*深度阅读', entry_text))
+            has_disinterest = bool(re.search(r'\[x\]\s*不感兴趣|\[X\]\s*不感兴趣', entry_text))
 
-                entries.append({
-                    'title': file_title,
-                    'source_url': source_url,
-                    'source_path': source_path,
-                    'brief': brief,
-                    'entry_lines': entry_text,
-                    'deepdive_existed': deepdive_existed,
-                })
+            entries.append({
+                'title': file_title,
+                'source_url': source_url,
+                'source_path': source_path,
+                'brief': brief,
+                'entry_lines': entry_text,
+                'has_deepread': has_deepread,
+                'has_disinterest': has_disinterest,
+            })
 
             i = next_i
         else:
             i += 1
 
     return entries
+
+
+def find_checked_entries(brief_content: str, date_str: str = None) -> list[dict]:
+    """Parse brief.md to find entries marked "[x] 深度阅读"."""
+    all_entries = _parse_brief_entries(brief_content, date_str)
+    entries = [e for e in all_entries if e['has_deepread']]
+    for e in entries:
+        e['deepdive_existed'] = 'deepdive' in e['entry_lines'].lower()
+    return entries
+
+
+def find_disinterested_entries(brief_content: str, date_str: str = None) -> list[dict]:
+    """Parse brief.md to find entries marked "[x] 不感兴趣" (and not also deep-read)."""
+    all_entries = _parse_brief_entries(brief_content, date_str)
+    return [e for e in all_entries if e['has_disinterest'] and not e['has_deepread']]
+
+
+def generate_disinterest_suggestion(entry: dict) -> dict:
+    """Call LLM to suggest interests.md updates based on a disinterested entry."""
+    title = entry['title']
+    brief = entry['brief']
+
+    prompt = f"""你是一个兴趣管理系统分析助手。用户标记了对以下内容「不感兴趣」。
+
+文档信息：
+- 标题: {title}
+- 简介: {brief}
+
+请分析此文档，建议是否更新 wiki/interests.md：
+
+1. 如果文档内容与某个现有兴趣相关但用户不感兴趣，建议将该兴趣移至排除列表或调整其关键词
+2. 如果文档涉及全新领域且用户不感兴趣，建议添加为排除项
+
+返回 JSON 格式（不要代码块，不要 markdown fences）：
+{{
+    "suggested_action": "add_disinterest | no_action",
+    "disinterest_name": "建议新增的排除项名称",
+    "disinterest_keywords": ["相关关键词"],
+    "disinterest_description": "简要说明",
+    "reasoning": "为什么建议这个操作"
+}}
+
+如果文档内容太泛或一次性，不值得特意排除，suggested_action 设为 "no_action"。"""
+
+    try:
+        raw = call_llm(prompt, max_tokens=1024)
+        clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+        clean = re.sub(r"\s*```$", "", clean.strip())
+        result = json.loads(clean)
+        result['title'] = title
+        return result
+    except Exception as e:
+        return {
+            'title': title,
+            'suggested_action': 'no_action',
+            'disinterest_name': '',
+            'disinterest_keywords': [],
+            'disinterest_description': '',
+            'reasoning': f'LLM 调用失败: {e}',
+        }
 
 
 def generate_deepdive(file_path: Path, title: str, brief: str,
@@ -416,15 +474,15 @@ def update_brief_status(brief_content: str, title_to_process: str) -> str:
     target_title = None
 
     for i, line in enumerate(lines):
-        if f"### {title_to_process}" in lines[max(0, i-3):i+1]:
-            # We're near the target entry
+        # Check surrounding lines for title (support ### or #### headers)
+        if any(title_to_process in lines[j] for j in range(max(0, i-3), i+1)):
             pass
 
         # Simple approach: find "[x] 深度阅读" and if this is a target entry, mark it differently
         if '[x] 深度阅读' in line or '[X] 深度阅读' in line:
             # Check if we're at a target entry (look back for title)
             for j in range(max(0, i-20), i):
-                if lines[j].startswith(f'### {title_to_process}') or title_to_process in lines[j]:
+                if title_to_process in lines[j]:
                     in_target_entry = True
                     break
             if in_target_entry:
@@ -441,7 +499,24 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
         print("brief.md not found. Run filter.py first.")
         return
 
+    # Archive current brief.md before processing
+    brief_archive = BRIEF_FILE.parent / "brief"
+    brief_archive.mkdir(parents=True, exist_ok=True)
+    archive_path = brief_archive / f"{date.today().isoformat()}.md"
     brief_content = read_file(BRIEF_FILE)
+    if brief_content.strip():
+        if archive_path.exists():
+            existing = read_file(archive_path)
+            archived = existing + "\n\n---\n\n" + brief_content + f"\n\n**归档于: {date.today().isoformat()}**\n"
+        else:
+            archived = brief_content + f"\n\n**归档于: {date.today().isoformat()}**\n"
+        write_file(archive_path, archived)
+        print(f"📦 brief.md 已归档到 {archive_path.relative_to(REPO_ROOT)}")
+        # Clear brief.md after archiving
+        write_file(BRIEF_FILE, "# 资讯简报\n")
+        print("   brief.md 已清空")
+    else:
+        print("brief.md 为空，跳过归档")
 
     # Find checked entries
     if date_str:
@@ -450,12 +525,13 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
         # Find entry with this filename
         entries = []
         lines = brief_content.split('\n')
+        HEADER = re.compile(r'^#{3,4} ')
         i = 0
         while i < len(lines):
-            if f"### {file_name}" in lines[i]:
+            if file_name in lines[i] and HEADER.match(lines[i]):
                 entry_lines = []
                 next_i = i + 1
-                while next_i < len(lines) and not lines[next_i].startswith('### '):
+                while next_i < len(lines) and not HEADER.match(lines[next_i]):
                     entry_lines.append(lines[next_i])
                     next_i += 1
 
@@ -486,6 +562,47 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
     else:
         entries = find_checked_entries(brief_content)
 
+    # ── Process disinterested entries (generate suggestion) ──
+    disinterest_entries = []
+    if not file_name:  # skip in --file mode
+        if date_str:
+            disinterest_entries = find_disinterested_entries(brief_content, date_str)
+        else:
+            disinterest_entries = find_disinterested_entries(brief_content)
+
+    if disinterest_entries:
+        print(f"\n发现 {len(disinterest_entries)} 个标记为「不感兴趣」的条目:")
+        print("正在分析并生成兴趣/排除列表更新建议...\n")
+        suggestions = []
+        for de in disinterest_entries:
+            suggestion = generate_disinterest_suggestion(de)
+            suggestions.append(suggestion)
+            print(f"  [{de['title']}]")
+            if suggestion.get('suggested_action') == 'add_disinterest':
+                kw = ', '.join(suggestion.get('disinterest_keywords', []))
+                name = suggestion.get('disinterest_name', '')
+                print(f"    💡 建议新增排除项: {name} [{kw}]")
+                print(f"    理由: {suggestion.get('reasoning', '')}")
+            else:
+                print(f"    无需更新: {suggestion.get('reasoning', '')}")
+            print()
+
+        if not json_output:
+            today = date.today().isoformat()
+            sug_path = DAILY_DIR / today / "disinterest-suggestions.md"
+            sug_path.parent.mkdir(parents=True, exist_ok=True)
+            sug_lines = [f"# 不感兴趣条目分析建议  {today}\n"]
+            for s in suggestions:
+                sug_lines.append(f"## {s.get('title', '')}")
+                sug_lines.append(f"- 建议操作: {s.get('suggested_action', '')}")
+                sug_lines.append(f"- 排除项名称: {s.get('disinterest_name', '')}")
+                sug_lines.append(f"- 关键词: {', '.join(s.get('disinterest_keywords', []))}")
+                sug_lines.append(f"- 理由: {s.get('reasoning', '')}")
+                sug_lines.append("")
+            write_file(sug_path, '\n'.join(sug_lines))
+            print(f"  建议已保存至: {sug_path.relative_to(REPO_ROOT)}\n")
+
+    # ── Check for deep-read entries ──
     if not entries:
         print("No entries marked for deep-read.")
         if date_str:
@@ -494,7 +611,12 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
             print(f"  Check brief.md for entry '{file_name}' with [x] 深度阅读")
         else:
             print("  Check brief.md for entries with [x] 深度阅读")
-        return
+        if not disinterest_entries:
+            return
+        # If only disinterested entries, we're done
+        if not entries:
+            print("\n✅ 不感兴趣条目分析完成。")
+            return
 
     print(f"Found {len(entries)} entries marked for deep-read.\n")
 
@@ -519,7 +641,7 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
 
         # 2. Guess by name (legacy)
         if not file_path:
-            for root_dir in [DAILY_DIR / today / "sources"]:
+            for root_dir in [DAILY_DIR / "sources" / today]:
                 if root_dir.exists():
                     for f in root_dir.iterdir():
                         if title in f.name or f.name.startswith(title.split('.')[0]):
@@ -612,10 +734,7 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
             else:
                 shutil.rmtree(img_dir, ignore_errors=True)
 
-    # ── Update brief.md marker ──
-    updated_brief = brief_content
-    if not json_output:
-        write_file(BRIEF_FILE, updated_brief)
+    # brief.md was archived and cleared at start — don't restore old entries
 
     # Clean up .tmp refetch cache
     for date_key in list(by_date) + [today]:
