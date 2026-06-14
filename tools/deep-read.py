@@ -22,6 +22,7 @@ import sys
 import json
 import shutil
 import argparse
+import requests
 from pathlib import Path
 from datetime import date
 from collections import defaultdict
@@ -32,6 +33,102 @@ from _utils import read_file, write_file, call_llm
 REPO_ROOT = Path(__file__).parent.parent
 DAILY_DIR = REPO_ROOT / "raw" / "digest"
 BRIEF_FILE = DAILY_DIR / "brief.md"
+MAX_IMAGE_SIZE = 2 * 1024 * 1024
+
+
+def extract_images(content):
+    """Extract (alt_text, url, context_2lines) from markdown source."""
+    pattern = re.compile(r'!\[(.*?)\]\((\S+?)\)')
+    results = []
+    lines = content.split('\n')
+    for i, line in enumerate(lines):
+        for m in pattern.finditer(line):
+            alt = m.group(1)
+            url = m.group(2)
+            ctx_start = max(0, i - 2)
+            ctx = '\n'.join(lines[ctx_start:i])
+            results.append((alt, url, ctx))
+    return results
+
+
+def download_images(images, dest_dir):
+    """Download images to dest_dir/{fig1.ext, ...}. Returns list of (url, filename, alt)."""
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    for idx, (alt, url, ctx) in enumerate(images):
+        ext = Path(url.split('?')[0]).suffix.lower()
+        if ext not in ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'):
+            ext = '.png'
+        filename = f"fig{idx + 1}{ext}"
+        try:
+            resp = requests.get(url, headers=headers, timeout=15, stream=True)
+            resp.raise_for_status()
+            cl = int(resp.headers.get('content-length', 0))
+            if cl > MAX_IMAGE_SIZE:
+                continue
+            data = resp.content
+            if len(data) > MAX_IMAGE_SIZE:
+                continue
+            (dest_dir / filename).write_bytes(data)
+            downloaded.append((url, filename, alt))
+        except Exception:
+            continue
+    return downloaded
+
+
+def build_image_prompt_section(downloaded, safe_title):
+    """Build image info block for LLM prompt. Empty string if no images."""
+    if not downloaded:
+        return ""
+    parts = ["\n---\n源文档中包含以下图片："]
+    for url, filename, alt in downloaded:
+        caption = alt if alt else '(无标题)'
+        parts.append(f"- `{filename}` — {caption} ({url})")
+    parts += [
+        "",
+        "请判断哪些是核心**算法图、架构图、流程图**等结构性图片。",
+        f"在报告中用 `![图片标题](deepdive-{safe_title}/{filename})` 引用它们。",
+        "忽略非结构性的装饰图（如结果对比图、示例截图、数据集样本等）。",
+    ]
+    return "\n".join(parts)
+
+
+def copy_local_images(images, source_dir, dest_dir):
+    """Copy local images from source_dir (sources/images/) to dest_dir.
+    Returns list of (orig_path, filename, alt) for successful copies."""
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for idx, (alt, url, ctx) in enumerate(images):
+        if url.startswith("http"):
+            continue
+        ext = Path(url.split('?')[0]).suffix.lower()
+        if ext not in ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'):
+            ext = '.png'
+        filename = f"fig{idx + 1}{ext}"
+        src = Path(source_dir) / url
+        if src.exists():
+            if src.stat().st_size > MAX_IMAGE_SIZE:
+                continue
+            dest = dest_dir / filename
+            shutil.copy2(str(src), str(dest))
+            copied.append((url, filename, alt))
+    return copied
+
+
+def cleanup_images(report_content, image_dir, safe_title):
+    """Remove unreferenced images from image_dir."""
+    if not image_dir or not image_dir.exists():
+        return
+    ref_prefix = f"deepdive-{safe_title}/"
+    referenced = set()
+    for m in re.finditer(r'\]\(' + re.escape(ref_prefix) + r'([^)]+)\)', report_content):
+        referenced.add(m.group(1))
+    for f in image_dir.iterdir():
+        if f.is_file() and f.name not in referenced:
+            f.unlink()
 
 
 def find_checked_entries(brief_content: str, date_str: str = None) -> list[dict]:
@@ -101,11 +198,16 @@ def find_checked_entries(brief_content: str, date_str: str = None) -> list[dict]
     return entries
 
 
-def generate_deepdive(file_path: Path, title: str, brief: str) -> str:
+def generate_deepdive(file_path: Path, title: str, brief: str,
+                      safe_title: str = "", downloaded_images: list = None) -> str:
     """Generate a 1500-3000 word deep-dive report for the file."""
     content = read_file(file_path)
     if len(content) > 20000:
         content = content[:20000]
+
+    img_section = ""
+    if downloaded_images:
+        img_section = build_image_prompt_section(downloaded_images, safe_title)
 
     prompt = f"""你是 AI 深度阅读助手。请对以下文档进行深度阅读分析，生成 1500-3000 字的详细报告。
 
@@ -117,6 +219,7 @@ def generate_deepdive(file_path: Path, title: str, brief: str) -> str:
 === CONTENT START ===
 {content}
 === CONTENT END ===
+{img_section}
 
 请生成一份结构化的深度阅读报告，包含：
 1. **核心观点概括** — 提炼文档最主要的 3-5 个核心观点
@@ -128,7 +231,7 @@ def generate_deepdive(file_path: Path, title: str, brief: str) -> str:
 要求：
 - 使用中文撰写
 - 报告应详细深入，但不堆砌废话
-- 如果文档包含图片/表格信息，简要提及
+- 对于重要图片（算法图、架构图、流程图），用 ![图片标题](deepdive-{safe_title}/{filename}) 在报告中引用
 - 不要出现 [[wikilinks]] 格式
 - 不要使用 markdown code fences
 
@@ -279,28 +382,63 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                 if file_path:
                     break
 
+        # Prepare safe_title and paths
+        safe_title = ''.join(c if c.isalnum() or c in '-_' else '_' for c in title)
+        deepdive_path = DAILY_DIR / today / "deepdive" / f"deepdive-{safe_title}.md"
+        if file_path and 'sources' in str(file_path):
+            source_date = str(file_path).split('digest/')[1].split('/')[0]
+            deepdive_path = DAILY_DIR / source_date / "deepdive" / f"deepdive-{safe_title}.md"
+
+        # Extract and download/copy images from source
+        downloaded_images = []
+        image_dir = None
+        if file_path and file_path.exists():
+            content = read_file(file_path)
+            all_imgs = extract_images(content)
+            if all_imgs:
+                image_dir = deepdive_path.parent / f"deepdive-{safe_title}"
+                print(f"  Found {len(all_imgs)} images in source")
+                url_imgs = [(a, u, c) for a, u, c in all_imgs if u.startswith("http")]
+                local_imgs = [(a, u, c) for a, u, c in all_imgs if not u.startswith("http")]
+                if url_imgs:
+                    dl = download_images(url_imgs, image_dir)
+                    downloaded_images.extend(dl)
+                if local_imgs:
+                    sources_img_dir = file_path.parent / "images"
+                    if sources_img_dir.exists():
+                        cl = copy_local_images(local_imgs, sources_img_dir, image_dir)
+                        downloaded_images.extend(cl)
+                if downloaded_images:
+                    print(f"    Acquired {len(downloaded_images)} images for LLM selection")
+                if not downloaded_images:
+                    shutil.rmtree(image_dir, ignore_errors=True)
+                    image_dir = None
+
         # Generate deep-dive report
         if file_path and file_path.exists():
             print(f"  Found original file: {file_path}")
-            deep_report = generate_deepdive(file_path, title, entry['brief'])
+            deep_report = generate_deepdive(
+                file_path, title, entry['brief'],
+                safe_title=safe_title, downloaded_images=downloaded_images,
+            )
         else:
             print(f"  ⚠️  Original file not found, generating from summary only")
-            # Try to find detailed report from entry
             detailed_report = ''
             detailed_match = re.search(r'\*\*详细报告\*\*：(.+?)(?=\n\n|\n###|$)', entry['entry_lines'], re.DOTALL)
             if detailed_match:
                 detailed_report = detailed_match.group(1).strip()
             deep_report = generate_deepdive_from_summary(title, entry['brief'], detailed_report)
 
-        # Save deep-dive report
-        safe_title = ''.join(c if c.isalnum() or c in '-_' else '_' for c in title)
-        deepdive_path = DAILY_DIR / today / "deepdive" / f"deepdive-{safe_title}.md"
-        if 'sources' in str(file_path):
-            source_date = str(file_path).split('digest/')[1].split('/')[0]
-            deepdive_path = DAILY_DIR / source_date / "deepdive" / f"deepdive-{safe_title}.md"
-
+        # Save deep-dive report and clean up unreferenced images
         deepdive_path.parent.mkdir(parents=True, exist_ok=True)
         write_file(deepdive_path, f"# {title} 深度阅读\n\n{deep_report}")
+        if image_dir and image_dir.exists():
+            cleanup_images(deep_report, image_dir, safe_title)
+            remaining = [f.name for f in image_dir.iterdir()] if image_dir.exists() else []
+            if remaining:
+                print(f"    Images kept: {len(remaining)} in {image_dir.name}/")
+            else:
+                shutil.rmtree(image_dir, ignore_errors=True)
         print(f"  ✅ Saved: {deepdive_path.relative_to(REPO_ROOT)}")
         results.append({
             'title': title,

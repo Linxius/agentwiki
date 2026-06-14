@@ -53,7 +53,7 @@ def load_processed(source_name):
             all_state = json.load(f)
     else:
         all_state = {}
-    return all_state.get(source_name, {"processed_ids": [], "last_fetch_date": None})
+    return all_state.get(source_name, {"last_fetch_date": None})
 
 
 def save_processed(source_name, data):
@@ -113,7 +113,7 @@ def parse_arxiv_entry(entry):
     }
 
 
-def fetch_arxiv_feed(categories, since_date, until_date, processed_ids):
+def fetch_arxiv_feed(categories, since_date, until_date):
     """Query arXiv API for papers in date range, paginating for all results."""
     cat_query = "+OR+".join(f"cat:{c}" for c in categories)
     sd = arxiv_date_param(since_date)
@@ -121,6 +121,7 @@ def fetch_arxiv_feed(categories, since_date, until_date, processed_ids):
     base_url = (f"{ARXIV_API}?search_query=({cat_query})+AND+submittedDate:[{sd}+TO+{ed}]"
                 f"&sortBy=submittedDate&sortOrder=descending")
 
+    seen = set()
     new_entries = []
     start = 0
     empty_pages = 0
@@ -143,7 +144,8 @@ def fetch_arxiv_feed(categories, since_date, until_date, processed_ids):
 
         for entry in entries:
             parsed = parse_arxiv_entry(entry)
-            if parsed["arxiv_id"] not in processed_ids:
+            if parsed["arxiv_id"] not in seen:
+                seen.add(parsed["arxiv_id"])
                 new_entries.append(parsed)
 
         start += ARXIV_PAGE_SIZE
@@ -196,8 +198,6 @@ def process_arxiv_source(source):
     print(f"\n[{name}] Processing...")
 
     processed = load_processed(name)
-    processed_ids = set(processed.get("processed_ids", []))
-
     yesterday = yesterday_str()
 
     if processed["last_fetch_date"] is None:
@@ -211,28 +211,20 @@ def process_arxiv_source(source):
 
     print(f"  Date range: {since_date} → {yesterday}")
 
-    entries = fetch_arxiv_feed(categories, since_date, yesterday, processed_ids)
+    entries = fetch_arxiv_feed(categories, since_date, yesterday)
 
     if not entries:
         print(f"  No new entries.")
-        new_ids = set()
     else:
         print(f"  Found {len(entries)} new entries.")
-        new_ids = set()
         count = 0
         for entry in entries:
             path = write_inbox_entry(name, entry)
             if path:
                 count += 1
-            new_ids.add(entry["arxiv_id"])
         print(f"  Wrote {count} files to inbox/.")
 
-    combined_ids = processed_ids | new_ids
-    save_processed(name, {
-        "processed_ids": sorted(combined_ids),
-        "last_fetch_date": yesterday,
-    })
-
+    save_processed(name, {"last_fetch_date": yesterday})
     return len(entries)
 
 

@@ -344,15 +344,22 @@ def generate_new_brief():
     write_file(BRIEF_FILE, content)
 
 
-def move_file_to_daily(file_path: Path, date_str: str):
-    """Move file to digest/YYYY-MM-DD/sources/."""
+def move_source(file_path: Path, date_str: str):
+    """Move .md file + its images/ dir to digest/YYYY-MM-DD/sources/."""
     dest_dir = DIGEST_DIR / date_str / "sources"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = dest_dir / file_path.name
+    dest_md = dest_dir / file_path.name
 
-    if not dest_path.exists():
-        shutil.move(str(file_path), str(dest_path))
-    return dest_path
+    if not dest_md.exists():
+        shutil.move(str(file_path), str(dest_md))
+
+    images_src = file_path.parent / "images"
+    if images_src.exists():
+        dest_images = dest_dir / "images"
+        if not dest_images.exists():
+            shutil.copytree(str(images_src), str(dest_images))
+
+    return dest_md
 
 
 def clear_inbox():
@@ -385,7 +392,11 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     BRIEF_DIR.mkdir(parents=True, exist_ok=True)
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
 
-    files = [f for f in INBOX_DIR.iterdir() if f.is_file() and f.suffix.lower() in {".md", ".pdf", ".txt", ".html", ".docx", ".pptx", ".xlsx"}]
+    files = []
+    for f in INBOX_DIR.rglob("*"):
+        if f.is_file() and f.suffix.lower() in {".md", ".pdf", ".txt", ".html", ".docx", ".pptx", ".xlsx"}:
+            files.append(f)
+    files.sort()
 
     if not files:
         print("inbox/ 中没有可筛选的文件。")
@@ -440,7 +451,7 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
         today = date.today().isoformat()
         for item in results:
             print(f"  移动: {item['file'].name} → {today}/sources/")
-            source_dest = move_file_to_daily(item["file"], today)
+            source_dest = move_source(item["file"], today)
             print(f"    ✅ {source_dest}")
 
         # clear inbox

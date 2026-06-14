@@ -25,10 +25,12 @@ The LLM reads the source, extracts knowledge, and updates the wiki:
 """
 
 import os
+import re
 import sys
 import json
 import shutil
 import tempfile
+import requests
 from pathlib import Path
 from collections import defaultdict
 from datetime import date
@@ -416,6 +418,101 @@ def convert_to_md(source: Path) -> Path:
     return output
 
 
+MAX_IMAGE_SIZE = 2 * 1024 * 1024
+
+
+def extract_images_from_source(content):
+    """Extract (alt_text, url) from markdown source."""
+    return re.findall(r'!\[(.*?)\]\((\S+?)\)', content)
+
+
+def download_url_images(images, dest_dir):
+    """Download URL images to dest_dir. Returns list of (url, filename, alt)."""
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    for idx, (alt, url) in enumerate(images):
+        if not url.startswith("http"):
+            continue
+        ext = Path(url.split('?')[0]).suffix.lower()
+        if ext not in ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'):
+            ext = '.png'
+        filename = f"fig{idx + 1}{ext}"
+        try:
+            resp = requests.get(url, headers=headers, timeout=15, stream=True)
+            resp.raise_for_status()
+            if len(resp.content) > MAX_IMAGE_SIZE:
+                continue
+            (dest_dir / filename).write_bytes(resp.content)
+            downloaded.append((url, filename, alt))
+        except Exception:
+            continue
+    return downloaded
+
+
+def copy_local_images(images, source_img_dir, dest_dir):
+    """Copy local images from source_img_dir to dest_dir."""
+    source_img_dir = Path(source_img_dir)
+    if not source_img_dir.exists():
+        return []
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for idx, (alt, url) in enumerate(images):
+        if url.startswith("http"):
+            continue
+        src = source_img_dir / url
+        if src.exists() and src.stat().st_size <= MAX_IMAGE_SIZE:
+            ext = src.suffix.lower()
+            if ext not in ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'):
+                ext = '.png'
+            filename = f"fig{idx + 1}{ext}"
+            shutil.copy2(str(src), str(dest_dir / filename))
+            copied.append((url, filename, alt))
+    return copied
+
+
+def build_ingest_image_prompt(available_images):
+    """Build image section for ingest LLM prompt."""
+    if not available_images:
+        return ""
+    parts = ["\n---\n源文档中包含以下图片，可供 wiki 页面使用："]
+    for url, filename, alt in available_images:
+        caption = alt if alt else '(无标题)'
+        parts.append(f"- `{filename}` — {caption}")
+    parts += [
+        "",
+        "对于选中的图片，在 source_page 中用以下格式引用：",
+        "`![图片标题](images/{slug}/fig1.png)`",
+        "其中 {slug} 使用你定义的 slug 字段值。",
+        "判断标准：核心架构图、流程图、关键结果图等对理解本文有帮助的图片。",
+    ]
+    return "\n".join(parts)
+
+
+def copy_referenced_images(report_content, slug, tmp_image_dir):
+    """Copy images referenced in report to wiki/images/<slug>/. Returns count."""
+    tmp_image_dir = Path(tmp_image_dir)
+    if not tmp_image_dir.exists():
+        return 0
+    images_dir = WIKI_DIR / "images" / slug
+    ref_pattern = re.compile(r'\]\(images/' + re.escape(slug) + r'/([^)]+)\)')
+    referenced = set(ref_pattern.findall(report_content))
+    if not referenced:
+        shutil.rmtree(tmp_image_dir, ignore_errors=True)
+        return 0
+    images_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for fname in referenced:
+        src = tmp_image_dir / fname
+        if src.exists():
+            shutil.copy2(str(src), str(images_dir / fname))
+            count += 1
+    shutil.rmtree(tmp_image_dir, ignore_errors=True)
+    return count
+
+
 def ingest(source_path: str, auto_convert: bool = True):
     source = Path(source_path)
     if not source.exists():
@@ -463,6 +560,28 @@ def ingest(source_path: str, auto_convert: bool = True):
 
     print(f"\nIngesting: {source.name}  (hash: {source_hash})")
 
+    # ── Image handling ──────────────────────────────────────────────
+    tmp_img_dir = None
+    img_prompt_section = ""
+    images = extract_images_from_source(source_content)
+    if images:
+        tmp_img_dir = WIKI_DIR / ".ingest_tmp_imgs"
+        all_imgs = []
+        url_imgs = [(a, u) for a, u in images if u.startswith("http")]
+        local_imgs = [(a, u) for a, u in images if not u.startswith("http")]
+        if url_imgs:
+            all_imgs.extend(download_url_images(url_imgs, tmp_img_dir))
+        if local_imgs:
+            sources_img_dir = source.parent / "images"
+            if sources_img_dir.exists():
+                all_imgs.extend(copy_local_images(local_imgs, sources_img_dir, tmp_img_dir))
+        if all_imgs:
+            img_prompt_section = build_ingest_image_prompt(all_imgs)
+            print(f"  Found {len(all_imgs)} images for wiki use")
+        else:
+            shutil.rmtree(tmp_img_dir, ignore_errors=True)
+            tmp_img_dir = None
+
     wiki_context = build_wiki_context()
     schema = read_file(SCHEMA_FILE)
 
@@ -492,7 +611,7 @@ IMPORTANT source_page instructions:
 - Include a "## 原始出处" section after Summary with:
   - 原始文件: [{source_file_repo}]({raw_relative_path}) — relative link to raw file
   - 原文链接: [{{url}}]({{url}}) — original source URL (if available)
-
+{img_prompt_section}
 Return ONLY a valid JSON object with these fields (no markdown fences, no prose outside the JSON):
 {{
   "title": "Human-readable title for this source",
@@ -524,6 +643,12 @@ Return ONLY a valid JSON object with these fields (no markdown fences, no prose 
     # Write source page
     slug = data["slug"]
     write_file(WIKI_DIR / "sources" / f"{slug}.md", data["source_page"])
+
+    # Copy referenced images to wiki/images/<slug>/
+    if tmp_img_dir and tmp_img_dir.exists():
+        img_count = copy_referenced_images(data["source_page"], slug, tmp_img_dir)
+        if img_count:
+            print(f"  Images: {img_count} saved to wiki/images/{slug}/")
 
     # Write entity pages
     for page in data.get("entity_pages", []):

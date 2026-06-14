@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "raw" / "papers"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "raw" / "inbox"
 
 ARXIV_PATTERNS = [
     re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?$"),                          # 2401.12345
@@ -225,7 +225,7 @@ def slugify(name: str) -> str:
 
 
 def resolve_output(source: str, arxiv_id: str | None, output_arg: str | None, backend: str = "auto") -> Path:
-    """Determine the output path."""
+    """Determine the output path: raw/inbox/<slug>/<slug>.md"""
     if output_arg:
         p = Path(output_arg)
         return p if p.is_absolute() else REPO_ROOT / p
@@ -235,9 +235,9 @@ def resolve_output(source: str, arxiv_id: str | None, output_arg: str | None, ba
     else:
         slug = slugify(Path(source).stem)
 
-    if backend == "mineru":
-        return DEFAULT_OUTPUT_DIR.parent / slug
-    return DEFAULT_OUTPUT_DIR / f"{slug}.md"
+    out_dir = DEFAULT_OUTPUT_DIR / slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir / f"{slug}.md"
 
 
 def main():
