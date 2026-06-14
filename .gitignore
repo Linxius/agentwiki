@@ -31,6 +31,7 @@ graph/graph-report.md
 
 # === raw/ 下不跟踪的内容 ===
 raw/inbox/
+raw/.feeds-state.json
 raw/papers/
 raw/articles/
 raw/books/
@@ -40,6 +41,8 @@ raw/docs/
 raw/datasets/
 raw/digest/sources/
 raw/digest/*/sources/
+raw/digest/brief.md
+raw/digest/brief/*.md
 
 # === 本地配置 ===
 config.local.json
