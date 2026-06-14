@@ -718,7 +718,7 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
 
         sections = []
         for safe_title, report, img_dir, title in date_results:
-            sections.append(f"## {title}\n\n{report}")
+            sections.append(f"## {title}\n\n{report}\n\n- [ ] 合入 wiki")
 
         combined = "\n\n---\n\n".join(sections)
         write_file(md_path, combined)

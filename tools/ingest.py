@@ -745,8 +745,8 @@ def run_from_digest(date_str: str = None):
     lines = brief_content.split('\n')
     i = 0
     while i < len(lines):
-        if lines[i].startswith('### ') and not lines[i].startswith('### ['):
-            title = lines[i][4:].strip()
+        if (lines[i].startswith('#### ') or lines[i].startswith('### ')) and not lines[i].startswith('### ['):
+            title = lines[i][4:].strip() if lines[i].startswith('#### ') else lines[i][4:].strip()
             
             # Check if this entry is for the specified date
             if date_str:
@@ -762,7 +762,7 @@ def run_from_digest(date_str: str = None):
             # Collect entry lines
             entry_lines = []
             next_i = i + 1
-            while next_i < len(lines) and not lines[next_i].startswith('### '):
+            while next_i < len(lines) and not re.match(r'^#{2,4} ', lines[next_i]):
                 entry_lines.append(lines[next_i])
                 next_i += 1
             
