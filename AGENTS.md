@@ -31,12 +31,14 @@ Or use shorthand triggers:
 ### Agent Proactive Reminders
 
 The agent should proactively detect and remind about:
+- **inbox.md has links**: Alert user "inbox.md 中有 N 个链接待处理" when links are added
 - **New files in inbox/**: Alert user "今日有 N 份文件待筛选" when files are added
 - **Pending deep-read**: When brief.md has `[x] 深度阅读` but no deepdive report yet
 - **Pending ingest**: When brief.md has `[x] 合入 wiki` but not yet processed
 - **After filter completes**: "筛选完成！报告已生成，请阅读 brief.md 确认"
 
 User can also trigger actions directly:
+- "处理 inbox" → agent runs inbox.py to process links
 - "开始筛选" → agent runs filter
 - "生成深度阅读" → agent generates deepdive for checked entries
 - "合入 wiki" → agent processes ingested entries from daily/
@@ -72,6 +74,7 @@ User can also trigger actions directly:
 ```
 raw/          # Source documents
   inbox/      # Pending filter — new materials arrive here
+    inbox.md  # User adds links here (arXiv IDs, URLs), processed by tools/inbox.py
   daily/      # Daily briefings and deep-read reports
     brief.md  # Today's brief report with entries sorted by interest match
     YYYY-MM-DD/
@@ -98,6 +101,7 @@ wiki/         # Agent owns this layer entirely
   syntheses/  # Saved query answers
 graph/        # Auto-generated graph data
 tools/        # Standalone Python scripts
+  inbox.py    # Process inbox.md links into markdown files in raw/inbox/
   health.py   # Structural checks (deterministic, no LLM calls)
   lint.py     # Content quality checks (uses LLM for semantic analysis)
   build_graph.py  # Knowledge graph generation
@@ -106,9 +110,28 @@ tools/        # Standalone Python scripts
   ingest.py   # Ingest source documents into wiki (supports --from-daily)
 ```
 
-## Filter → Deep Read → Ingest Workflow (New)
+## Link Inbox → Filter → Deep Read → Ingest Workflow
 
 This is the recommended workflow for processing new materials from inbox/ into wiki.
+
+### Pre-step: Inbox Links
+
+Triggered by: *"inbox"* or `python tools/inbox.py`
+
+Steps:
+1. Read `raw/inbox/inbox.md` — contains URL links (arXiv IDs, web pages)
+2. For each arXiv link → use `arxiv2md` (or fallback to `pdf2md.py`) to convert to markdown
+3. For each web URL → use `requests` + `trafilatura` to fetch page and extract readable markdown
+4. Save each converted file to `raw/inbox/YYYY-MM-DD/<slug>.md`
+5. Clear `inbox.md` (links are removed after processing)
+
+Example `inbox.md` format:
+```markdown
+# Inbox
+- https://arxiv.org/abs/2401.12345
+- https://example.com/article
+- 2401.12345
+```
 
 ### Stage 1: Filter
 

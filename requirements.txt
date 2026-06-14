@@ -2,3 +2,8 @@
 # Pin to a verified safe version. See: https://github.com/SamurAIGPT/llm-wiki-agent/issues/41
 litellm~=1.83.10
 networkx~=3.6.1
+
+# inbox link processing
+requests
+readability-lxml
+trafilatura
