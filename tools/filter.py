@@ -30,6 +30,7 @@ import argparse
 from pathlib import Path
 from datetime import date
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import os
 
@@ -46,7 +47,7 @@ CATEGORIES = [
 ]
 INTERESTS_FILE = REPO_ROOT / "wiki" / "interests.md"
 LOG_FILE = REPO_ROOT / "wiki" / "log.md"
-SCHEMA_FILE = REPO_ROOT / "AGENTS.md"
+FILTER_CACHE = DIGEST_DIR / ".filter-cache.json"
 
 
 def parse_interests(content: str) -> list[dict]:
@@ -84,149 +85,152 @@ def parse_interests(content: str) -> list[dict]:
 
 
 def get_file_preview(file_path: Path) -> str:
-    """Get first 4000 chars of file for LLM analysis."""
+    """Get file preview for LLM. Papers: abstract + intro. Others: first 8000 chars."""
     content = read_file(file_path)
-    if len(content) <= 4000:
+    if len(content) <= 8000:
         return content
-    return content[:4000]
+
+    # Detect paper: has Introduction section
+    has_intro = re.search(r'^##\s+(1\s+)?[Ii]ntroduction', content, re.MULTILINE)
+
+    if not has_intro:
+        return content[:8000]
+
+    # Extract YAML frontmatter
+    parts = []
+    yaml_match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+    if yaml_match:
+        parts.append(yaml_match.group(0))
+
+    # Extract Abstract section
+    abs_match = re.search(
+        r'(##\s+[Aa]bstract|##\s+摘要|\*\*摘要\*\*)'
+        r'(.*?)(?=\n##\s+\d?\s*[A-Z]|\n##\s+[A-Z]|\Z)',
+        content, re.DOTALL
+    )
+    if abs_match:
+        parts.append(abs_match.group(0))
+
+    # Extract Introduction (first 2000 chars)
+    intro_match = re.search(r'^##\s+(1\s+)?[Ii]ntroduction\n(.*)', content, re.MULTILINE | re.DOTALL)
+    if intro_match:
+        intro = intro_match.group(2)[:2000]
+        parts.append(f"## Introduction\n{intro}")
+
+    result = '\n\n'.join(parts)
+    return result[:8000] if result else content[:8000]
 
 
 def extract_source_url(file_path: Path) -> str:
-    """Try to extract URL from file metadata, filename, or content."""
-    # If filename looks like a URL or has URL info
-    name = file_path.stem
-    for word in name.split('-'):
-        if word.startswith('http') or 'arxiv' in word.lower() or '.org' in word:
-            return f"https://{word}"
-
-    # Try to find URL in first 100 lines
+    """Try to extract URL from file metadata, filename, or content.
+    Priority: YAML frontmatter > content URL > filename heuristic."""
     content = read_file(file_path)
     lines = content.split('\n')
+
+    # 1. YAML frontmatter: url: "..."
+    if content.startswith('---'):
+        end = content.find('---', 3)
+        if end != -1:
+            for line in content[3:end].split('\n'):
+                m = re.match(r'url:\s*["\']?(https?://\S+)["\']?\s*', line.strip())
+                if m:
+                    return m.group(1).rstrip('"\'"')
+
+    # 2. Content lines: url: / source_url: / bare http links
     for line in lines[:100]:
         line = line.strip()
-        if line.startswith('url: ') or line.startswith('URL: '):
-            return line.split(': ', 1)[1].strip()
-        if line.startswith('> url: ') or line.startswith('source_url: '):
-            url = line.split(':', 1)[1].strip()
-            if url:
-                return url
+        m = re.match(r'(?:url|URL|source_url):\s*["\']?(https?://\S+)["\']?\s*', line)
+        if m:
+            return m.group(1).rstrip('"\'"')
         if line.startswith('http') and '://' in line:
             return line.split()[0]
 
-    # If file is from wiki already, return its path
-    return file_path.as_posix()  # Use posix path for cross-platform
+    # 3. Filename heuristic (last resort)
+    name = file_path.stem
+    for word in name.split('-'):
+        if word.startswith('http') or word.startswith('www.'):
+            return f"https://{word}"
+        if '.' in word and any(tld in word for tld in ['.com', '.org', '.net', '.io']):
+            return f"https://{word}"
+
+    return file_path.as_posix()
 
 
-def analyze_file(file_path: Path, interests: list[dict]) -> dict:
-    """Use LLM to analyze file and generate summary + match against interests."""
-    if not interests:
+def analyze_file(file_path: Path, interests_desc: str) -> list[dict]:
+    """Use LLM to analyze file. interests_desc is precompiled from run_filter()."""
+    if not interests_desc.strip():
         print("  Warning: No interests defined. Generating summary only.")
 
-    schema = read_file(SCHEMA_FILE)
     preview = get_file_preview(file_path)
     source_url = extract_source_url(file_path)
 
-    interests_desc = ""
-    for interest in interests:
-        kw_str = ", ".join(interest.get("keywords", []))
-        interests_desc += f"- {interest['name']}:\n  - 权重: {interest.get('weight', 0.5)}\n  - 关键词: [{kw_str}]\n  - 描述: {interest.get('description', '')}\n"
-
-    # Detect if file might contain multiple items (arxiv list, newsletter, etc.)
+    # Detect if file might contain multiple items
     is_multientry = any(kw in preview.lower() for kw in [
         "arxiv", "paper", "list", "summary", "newsletter", "digest",
         "bulletin", "weekly", "daily", "top", "most", "recent",
     ])
 
     if is_multientry:
-        # Multi-entry mode: expect array of entries
-        entries_prompt = """IMPORTANT: This document may contain MULTIPLE independent items (papers, news, etc.).
-You MUST extract EACH distinct item as a separate entry.
-
-Return a JSON ARRAY of objects (not a single object):
-[
-  {{
-    "item_id": 1,
-    "title": "title of item 1",
-    "source_url": "url of item 1 if available, else null",
-    "match_level": "interested | possibly_interested | not_interested",
-    "matched_interests": ["interests"],
-    "reason": "why it matches (1-2 sentences)",
-    "brief": "3-5 sentence summary of item 1",
-    "detailed_report": "500-800 word detailed report about item 1 in Chinese"
-  }},
-  {{
-    "item_id": 2,
-    "title": "title of item 2",
-    "source_url": "url of item 2 if available, else null",
-    "match_level": "interested | possibly_interested | not_interested",
-    "matched_interests": ["interests"],
-    "reason": "why it matches (1-2 sentences)",
-    "brief": "3-5 sentence summary of item 2",
-    "detailed_report": "500-800 word detailed report about item 2 in Chinese"
-  }}
-]
-
-For each item:
-- Extract its title if it has one
-- Find any associated URL (arxiv, github, etc.)
-- Assess match against user interests independently
-- Write a focused 500-800 word report about THIS specific item only
-"""
+        entry_count_hint = "\nExtract EACH distinct item as a separate entry."
     else:
-        # Single-entry mode
-        entries_prompt = """Return a JSON ARRAY with exactly ONE object (one item):
+        entry_count_hint = "\nReturn exactly ONE entry in the array."
+
+    prompt = f"""You are an AI assistant analyzing research materials. Use concise Chinese.
+
+返回格式 (JSON array, 不要代码块):
 [
-  {{
-    "item_id": 1,
-    "title": "document title",
+    {{
+    "title": "document or item title",
+    "title_cn": "标题中文翻译",
     "source_url": "url if available, else null",
+    "domain": "所属领域 (e.g. 计算机视觉/3D重建/NLP)",
+    "keywords": ["关键术语(中文)", "3-5个"],
     "match_level": "interested | possibly_interested | not_interested",
-    "matched_interests": ["interests"],
-    "reason": "brief explanation (1-2 sentences)",
-    "brief": "3-5 sentence summary",
-    "detailed_report": "500-800 word detailed report in Chinese covering background, methods, key data/insights, and relevance to interests"
+    "matched_interests": ["兴趣名称"],
+    "reason": "why it matches (1-2 sentences)",
+    "brief": "2-3 sentence summary",
+    "detailed_report": "300-500 word Chinese report",
+    "suggested_category": "papers | articles | talks | books | docs | projects | datasets"
   }}
-]"""
-
-    prompt = f"""You are an AI assistant analyzing research materials. Analyze the following document and extract all independent items with their interest matches.
-
-Schema and conventions:
-{schema}
+]{entry_count_hint}
 
 Current interests:
 {interests_desc if interests_desc else "No specific interests defined."}
 
-Document to analyze (file: {file_path.name}):
-=== DOCUMENT START ===
+Document ({file_path.name}):
+=== START ===
 {preview}
-=== DOCUMENT END ===
+=== END ===
 
-{entries_prompt}
+Return ONLY the JSON array. No markdown fences, no prose.
 
-CRITICAL: Return ONLY the JSON array. No markdown fences, no prose.
-"""
+如果下方「Current interests」为空，matched_interests 返回空数组 []。"""
 
+    raw = None
+    data = None
     try:
-        raw = call_llm(prompt, max_tokens=8192)
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw.strip())
-        data = json.loads(raw)
+        raw = call_llm(prompt, max_tokens=4096)
+        clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+        clean = re.sub(r"\s*```$", "", clean.strip())
+        data = json.loads(clean)
     except Exception as e:
-        print(f"  ⚠️  LLM analysis failed for {file_path.name}: {e}")
-        # Fallback with basic info
+        print(f"  ⚠️  LLM failed for {file_path.name}: {e}")
+        if raw:
+            print(f"  Raw (first 300): {raw[:300]}")
+
+    if data is None:
         data = [{
             "item_id": 1,
             "match_level": "not_interested",
             "matched_interests": [],
             "reason": "LLM analysis failed",
-            "brief": f"A document titled '{file_path.name}'.",
-            "detailed_report": f"No detailed report available. File: {file_path.name}。\n\n来源：{source_url}",
+            "brief": f"Unable to analyze '{file_path.name}'.",
+            "detailed_report": f"LLM error. Raw: {raw[:500] if raw else 'API error'}",
             "title": file_path.stem,
             "source_url": source_url,
             "suggested_category": "papers",
         }]
-
-    if not isinstance(data, list):
+    elif not isinstance(data, list):
         data = [data]
 
     results = []
@@ -239,17 +243,20 @@ CRITICAL: Return ONLY the JSON array. No markdown fences, no prose.
             "reason": entry.get("reason", ""),
             "suggested_category": entry.get("suggested_category", "papers"),
             "title": entry.get("title", file_path.stem),
+            "title_cn": entry.get("title_cn", ""),
             "brief": entry.get("brief", ""),
             "detailed_report": entry.get("detailed_report", ""),
             "source_url": entry.get("source_url") or source_url,
+            "domain": entry.get("domain", ""),
+            "keywords": entry.get("keywords", []),
         })
 
     return results
 
 
-def generate_brief_entries(results: list[dict]) -> str:
+def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
     """Generate the brief.md content from analysis results."""
-    today = date.today().isoformat()
+    today = date_str or date.today().isoformat()
     lines = [f"# 资讯简报  {today}\n"]
     lines.append("")
 
@@ -288,6 +295,16 @@ def generate_brief_entries(results: list[dict]) -> str:
 
                 lines.append(f"#### {entries_title}")
                 lines.append(f"- 来源: {item['source_url']}")
+                if date_str:
+                    src_path = f"raw/digest/{date_str}/sources/{fname}"
+                    lines.append(f"- 源文件: {src_path}")
+                if item.get('title_cn'):
+                    lines.append(f"- 标题: {item['title_cn']}")
+                if item.get('domain'):
+                    lines.append(f"- 领域: {item['domain']}")
+                if item.get('keywords'):
+                    kw = ', '.join(item['keywords']) if isinstance(item['keywords'], list) else item['keywords']
+                    lines.append(f"- 关键词: {kw}")
                 lines.append(f"- 匹配: {', '.join(item['matched_interests']) if item['matched_interests'] else '无'}")
                 lines.append(f"- 理由: {item['reason']}")
                 lines.append(f"- [ ] 深度阅读")
@@ -363,7 +380,7 @@ def move_source(file_path: Path, date_str: str):
 
 
 def clear_inbox():
-    """Clear inbox/ directory."""
+    """Clear inbox/ directory (keep inbox.md, empty its content)."""
     if not INBOX_DIR.exists():
         return
     inbox_files = list(INBOX_DIR.iterdir())
@@ -371,12 +388,17 @@ def clear_inbox():
         print("  inbox/ 已为空。")
         return
 
-    count = len(inbox_files)
+    count = 0
     for f in inbox_files:
+        if f.name == "inbox.md":
+            f.write_text("# Inbox\n", encoding="utf-8")
+            print("  📝 清空 inbox.md 内容")
+            continue
         if f.is_file():
             f.unlink()
         elif f.is_dir():
             shutil.rmtree(f)
+        count += 1
     print(f"  ✅ 已清空 inbox/ ({count} 个文件)")
 
 
@@ -385,21 +407,56 @@ def append_log(entry: str):
     write_file(LOG_FILE, entry.strip() + "\n\n" + existing)
 
 
+# ─── Checkpoint cache ──────────────────────────────────────────────
+
+def load_filter_cache() -> dict:
+    """Load per-file results cache. Returns {rel_path_str: [result_dict, ...]}."""
+    if FILTER_CACHE.exists():
+        try:
+            return json.loads(FILTER_CACHE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_filter_cache(cache: dict):
+    """Write cache to disk immediately."""
+    FILTER_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    FILTER_CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def rebuild_results_from_cache(cache: dict) -> list[dict]:
+    """Rebuild results list from cache, converting rel paths back to Path objects."""
+    results = []
+    for rel_path, entries in cache.items():
+        abs_path = (REPO_ROOT / rel_path).resolve()
+        for entry in entries:
+            entry["file"] = abs_path
+            results.append(entry)
+    return results
+
+
 def run_filter(dry_run: bool = False, json_output: bool = False):
-    """Main filter flow."""
-    # Ensure directories exist
+    """Main filter flow with per-file checkpoint cache."""
     DIGEST_DIR.mkdir(parents=True, exist_ok=True)
     BRIEF_DIR.mkdir(parents=True, exist_ok=True)
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
 
     files = []
     for f in INBOX_DIR.rglob("*"):
+        if f.name == "inbox.md":
+            continue
         if f.is_file() and f.suffix.lower() in {".md", ".pdf", ".txt", ".html", ".docx", ".pptx", ".xlsx"}:
             files.append(f)
     files.sort()
 
     if not files:
         print("inbox/ 中没有可筛选的文件。")
+        # Load cache and check if there were previously processed files
+        if FILTER_CACHE.exists():
+            cache = load_filter_cache()
+            if cache:
+                print("但有缓存中的历史结果。运行 --no-scan? 或用 --clear-cache 重置。")
         return
 
     print(f"找到 {len(files)} 个文件待筛选。\n")
@@ -413,14 +470,71 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     else:
         print("  提示：wiki/interests.md 为空，仅生成摘要不匹配兴趣。\n")
 
-    # Analyze files
-    results = []
+    # Load checkpoint cache
+    cache = load_filter_cache()
+    skipped_from_cache = 0
+
+    # Precompile interests_desc (same for all files)
+    interests_desc = ""
+    for interest in interests:
+        kw_str = ", ".join(interest.get("keywords", []))
+        interests_desc += f"- {interest['name']}:\n  - 权重: {interest.get('weight', 0.5)}\n  - 关键词: [{kw_str}]\n  - 描述: {interest.get('description', '')}\n"
+
+    # Collect files that need analysis
+    pending = []
     for file_path in files:
-        print(f"  分析: {file_path.name}")
-        file_results = analyze_file(file_path, interests)
-        for r in file_results:
-            results.append(r)
-            print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
+        rel = str(file_path.relative_to(REPO_ROOT))
+        if rel in cache:
+            skipped_from_cache += 1
+            n = len(cache[rel])
+            print(f"  ⏭️  {file_path.name} ({n} 条，已缓存)")
+        else:
+            pending.append((file_path, rel))
+
+    if pending:
+        print(f"\n需分析 {len(pending)} 个文件（并行 max_workers=2）:\n")
+
+        with ThreadPoolExecutor(max_workers=2) as exec:
+            future_map = {
+                exec.submit(analyze_file, fp, interests_desc): (fp, rel)
+                for fp, rel in pending
+            }
+
+            for future in as_completed(future_map):
+                fp, rel = future_map[future]
+                try:
+                    file_results = future.result()
+                    serialized = []
+                    for r in file_results:
+                        item = dict(r)
+                        item["file"] = rel
+                        serialized.append(item)
+                    cache[rel] = serialized
+                    save_filter_cache(cache)
+                    for r in file_results:
+                        print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
+                except Exception as e:
+                    print(f"  ⚠️  {fp.name} failed: {e}")
+                    src = extract_source_url(fp)
+                    fallback = [{
+                        "file": rel,
+                        "item_id": 1,
+                        "match_level": "not_interested",
+                        "matched_interests": [],
+                        "reason": f"LLM failed: {e}",
+                        "suggested_category": "papers",
+                        "title": fp.stem,
+                        "brief": f"Analysis failed for '{fp.name}'.",
+                        "detailed_report": f"No report available.",
+                        "source_url": src,
+                    }]
+                    cache[rel] = fallback
+                    save_filter_cache(cache)
+    else:
+        print(f"\n所有文件均已缓存（{skipped_from_cache} 个）。")
+
+    # Rebuild full results from cache
+    results = rebuild_results_from_cache(cache)
 
     # Inject source URL into each file's frontmatter before moving
     injected = set()
@@ -430,32 +544,37 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
             inject_source_url(fp, r['source_url'])
             injected.add(fp)
 
-    # Sort results: interested > possibly_interested > not_interested
+    # Sort: interested > possibly_interested > not_interested
     priority = {"interested": 0, "possibly_interested": 1, "not_interested": 2}
     results.sort(key=lambda x: priority.get(x["match_level"], 3))
 
     # Generate brief.md
-    brief_content = generate_brief_entries(results)
+    today = date.today().isoformat()
+    brief_content = generate_brief_entries(results, today)
 
     if not dry_run:
-        # Archive current brief if it exists
         if BRIEF_FILE.exists():
             print("  正在归档旧 brief...")
             archive_current_brief()
             generate_new_brief()
 
-        # Write today's brief
         write_file(BRIEF_FILE, brief_content)
 
-        # Move files to digest/YYYY-MM-DD/sources/
-        today = date.today().isoformat()
         for item in results:
-            print(f"  移动: {item['file'].name} → {today}/sources/")
-            source_dest = move_source(item["file"], today)
-            print(f"    ✅ {source_dest}")
+            if item["file"].exists():
+                print(f"  移动: {item['file'].name} → {today}/sources/")
+                try:
+                    source_dest = move_source(item["file"], today)
+                    print(f"    ✅ {source_dest}")
+                except Exception as e:
+                    print(f"    ⚠️  move failed: {e}")
 
-        # clear inbox
         clear_inbox()
+
+        # Clear checkpoint cache
+        if FILTER_CACHE.exists():
+            FILTER_CACHE.unlink()
+            print("  🧹 已清理缓存")
 
     # Log
     log_entry = f"## [{date.today().isoformat()}] filter | {len(results)} files processed"
@@ -465,7 +584,7 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
         json_results = []
         for r in results:
             json_results.append({
-                "file": str(r["file"].relative_to(REPO_ROOT)),
+                "file": str(r["file"].relative_to(REPO_ROOT)) if isinstance(r["file"], Path) else r["file"],
                 "source_url": r["source_url"],
                 "match_level": r["match_level"],
                 "matched_interests": r["matched_interests"],
@@ -484,6 +603,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Filter and classify files in raw/inbox/")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without moving files")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+    parser.add_argument("--clear-cache", action="store_true", help="Clear checkpoint cache and re-analyze all files")
     args = parser.parse_args()
+
+    if args.clear_cache:
+        if FILTER_CACHE.exists():
+            FILTER_CACHE.unlink()
+            print("🧹 缓存已清理")
+        else:
+            print("缓存不存在，无需清理")
+        sys.exit(0)
 
     run_filter(dry_run=args.dry_run, json_output=args.json)
