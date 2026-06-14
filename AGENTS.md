@@ -3,10 +3,7 @@
 ## Output Language
 `config.json` specifies `"output_language": "zh-CN"`. All wiki output must be written in Simplified Chinese.
 
-Read `config.json` at the repo root for the output language setting. All wiki output should use that language.
-This wiki is maintained entirely by your coding agent. No API key or Python scripts needed — just open this repo in Codex, OpenCode, or any agent that reads this file, and talk to it.
-
-Alternatively, you can use the script-based ingest (requires `litellm` + LLM API): `python tools/ingest.py <file>`.
+This wiki is maintained entirely by your coding agent. No API key needed — just open this repo in Claude Code, OpenCode, or any agent that reads this file, and talk to it. For script-based ingest: `python tools/ingest.py <file>` (requires `litellm` + LLM API).
 
 ## ⚠️ PDF Handling Rule
 **NEVER use the Read tool on `.pdf` files.** Opencode's Read tool does not support PDFs — it will raise an error. Always run `python tools/pdf2md.py <file.pdf>` first, then use `ingest` on the generated `.md` file.
@@ -55,35 +52,9 @@ The agent should proactively detect and remind about:
 
 ### Status Auto-Detect
 
-Run `python tools/status.py` — script checks pipeline state and suggests next step.
-
+Run `python tools/status.py` — checks pipeline state and suggests next step.
 `python tools/status.py --blockers` — show what blocks each step.
-`python tools/status.py --next filter` — exit 0/1 if step can run (useful for scripting).
-
-Legacy manual check (if script unavailable):
-
-| 检查点 | 读什么 | 判断 |
-|---|---|---|
-| inbox.md 链接 | `raw/inbox/inbox.md` | 统计 markdown 链接数 |
-| inbox/ 待筛选 | `raw/inbox/` 下日期目录 | 统计 .md 文件数，排除已处理的 |
-| brief 最近简报 | `raw/digest/brief.md` | 是否存在、是否有内容 |
-| 待深度阅读 | `raw/digest/brief.md` | 扫描 `[x] 深度阅读` 条目 |
-| 待合入 wiki | `raw/digest/brief.md` | 扫描 `[x] 合入 wiki` 条目 |
-| feeds 配置 | `config.json` → `feeds.sources` | 已配置源的名称和数量 |
-| feeds 上次拉取 | `raw/.feeds-state.json` | 读取各源 `last_fetch_date`，为空表示从未拉取 |
-
-输出格式示例：
-```
-📋 Pipeline Status:
-1. inbox: 3 links in inbox.md
-2. inbox: 15 files pending filter
-3. brief: 2026-06-14 简报已生成
-4. deep-read: 2 checked, 0 done
-5. ingest: 1 checked, 0 done
-6. feeds: 已配置 1 个源，上次拉取 2026-06-14（1天前）
-
-→ 建议: 处理 inbox → filter → 生成深度阅读 → 合入 wiki
-```
+`python tools/status.py --next filter` — exit 0/1 if step can run.
 
 ## Status Flow
 
@@ -94,13 +65,13 @@ Legacy manual check (if script unavailable):
 ## Directory Layout
 
 ```
-raw/          inbox/  inbox.md  (link queue)
-              inbox/  YYYY-MM-DD/  *.md  (fetched content)
+raw/          inbox/  inbox.md
+              inbox/  YYYY-MM-DD/  *.md
               digest/  brief.md  YYYY-MM-DD/{deepdive-*/,sources/}  brief/
               filter/ papers/ articles/ talks/ books/ projects/ docs/ datasets/
 wiki/         index.md log.md overview.md issues.md interests.md
               sources/ entities/ concepts/ syntheses/
-graph/        (auto-generated graph data)
+graph/        graph.json graph.html
 templates/    generic.md paper.md article.md book.md dataset.md doc.md project.md talk.md
 tools/        inbox.py health.py lint.py build_graph.py filter.py deep-read.py
               download-images.py ingest.py status.py validate-wiki.py
@@ -120,15 +91,7 @@ Steps:
 2. For each arXiv link → use `arxiv2md` (or fallback to `pdf2md.py`) to convert to markdown
 3. For each web URL → use `requests` + `trafilatura` to fetch page and extract readable markdown
 4. Save each converted file to `raw/inbox/YYYY-MM-DD/<slug>.md`
-5. Clear `inbox.md` (links are removed after processing)
-
-Example `inbox.md` format:
-```markdown
-# Inbox
-- https://arxiv.org/abs/2401.12345
-- https://example.com/article
-- 2401.12345
-```
+5. Clear `inbox.md`
 
 ### Stage 1: Filter
 
@@ -147,14 +110,7 @@ Steps:
    - Entries grouped by match level: `[感兴趣]` → `[可能感兴趣]` → `[不感兴趣]`
 5. Move processed files to `raw/digest/YYYY-MM-DD/sources/`
 6. Archive current brief.md to `raw/digest/brief/YYYY-MM-DD.md`
-7. Clear inbox/
-
-### User: Read brief.md
-
-User reviews `raw/digest/brief.md`, reads brief + detailed report for each entry. Decides which to deep-read and which to ingest into wiki.
-
-- [ ] 深度阅读 — user checks if they want a deep-dive report (~1500-3000 words)
-- [ ] 合入 wiki — user checks if they want to ingest into wiki
+7. Clear inbox/   → 用户阅读 `brief.md`，勾选 `[x] 深度阅读` 或 `[x] 合入 wiki` 确定下一步
 
 ### Stage 2: Deep Read
 
@@ -209,34 +165,23 @@ Triggered by: *"ingest <file>"*
 **Supported formats:** Markdown (`.md`) is ingested directly. Non-markdown files (`.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) are auto-converted to markdown via [markitdown](https://github.com/microsoft/markitdown) before ingestion. PDF files, arXiv IDs, or arXiv URLs are processed via `tools/pdf2md.py`. Use `--no-convert` to skip auto-conversion.
 
 Steps (in order):
-1. **PDF preprocessing** — run `tools/pdf2md.py <path-to-pdf>` first (timeout ≥600s). Then read the `.md` output.
-2. **Book splitting** — directory (Form B): use existing chapter files. Single file (Form A): split by `##`/`#` headings into `raw/books/<slug>/sourceFile/ch-*.md`, delete original.
-3. Extract original URL from frontmatter, arXiv ID, or content — if none found, ask user.
+1. **PDF** — `tools/pdf2md.py <path>` (timeout ≥600s). Read `.md` output.
+2. **Book splitting** — dir: use chapter files. Single file: split by `##` into `raw/books/<slug>/*.md`.
+3. Extract original URL from frontmatter/arXiv ID/content — if none, ask user.
 4. Read `wiki/index.md` + `wiki/overview.md` for context.
-5. Write source page(s) using the corresponding template (see `templates/`). Set `source_file` to repo-relative raw path, `url` to original URL, include `## 原始出处` section.
-6. **Download images** — run `tools/download-images.py <slug>` to fetch external images to `wiki/images/<slug>/` and update paths.
-7. Update `wiki/index.md` — add entry under Sources section.
-8. Update `wiki/overview.md` — revise synthesis if warranted.
-9. Update/create entity pages for companies, projects, products — **DO NOT** create for authors of academic papers.
-10. Update/create concept pages for key ideas and frameworks.
-11. If paper compares with important related work, create source pages for those works.
-12. Flag contradictions — append to `wiki/issues.md` under Contradictions.
-13. Append to `wiki/log.md`: `## [YYYY-MM-DD] ingest | <Title>`.
-14. **Post-ingest validation** — run `python tools/validate-wiki.py` to check for broken `[[wikilinks]]`, verify all new pages in `index.md`. Append broken links to `wiki/issues.md` under Phantom Links.
-15. Run `health` as post-ingest integrity check.
+5. Write source page(s) using template (`templates/`). Set `source_file` + `url`, include `## 原始出处`.
+6. **Download images** — `tools/download-images.py <slug>` to `wiki/images/<slug>/`.
+7. Update `wiki/index.md` (Sources section) + `wiki/overview.md` (if warranted).
+8. Update/create entity (companies/projects/products, **NOT** paper authors) + concept pages.
+9. If paper compares with important related work, create source pages for those works.
+10. Flag contradictions → `wiki/issues.md` (Contradictions).
+11. Append to `wiki/log.md`: `## [YYYY-MM-DD] ingest | <Title>`.
+12. **Post-ingest validation** — `validate-wiki.py` checks broken `[[wikilinks]]` + index coverage. Append broken links to `wiki/issues.md` (Phantom Links).
+13. Run `health` as post-ingest integrity check.
 
-### Important Concept Distinction
+### Concept Distinction
 
-When a paper introduces a technique that falls under a broad concept category (e.g., "Frame Generation", "Super Resolution"), distinguish between:
-
-- **Generic concept pages** — cross-paper comparison of different method families (tagged with multiple sources)
-- **Method-specific pages** — the concrete technical approach from this specific paper (tagged with the current source)
-
-Example from Mob-FGSR:
-- `FrameGeneration.md` — lists 3DWarp, BSR, ExtraNet, Mob-FGSR, DLSS3 as separate techniques
-- `MobFGSR.md` — the paper's concrete approach: splatting + quadratic motion modeling
-
-This prevents conflation of different implementations of the same high-level idea.
+区分通用概念页（跨论文方法对比，多 sources 标签）与方法具体实现页（单 source 标签），避免混用。例：`FrameGeneration.md`（List 3DWarp/BSR/Mob-FGSR/DLSS3）vs `MobFGSR.md`（论文具体方法）。
 
 ### Source-Type Templates
 
@@ -278,17 +223,7 @@ Triggered by: *"lint"*
    - **Misclassification** — pages whose `type: entity|concept` seems wrong given their content; LLM suggests the correct type
    - **Data gaps** — questions the wiki can't answer; LLM suggests new source types to seek
 
-3. Build a structured summary grouped by category with file path, description, and LLM suggestion:
-   ```
-   ## Orphan Pages
-   - `entities/VGGT.md` — 2 outbound links, no inbound. Suggestion: merge (high confidence)
-
-   ## Broken Links
-   - `[[DUSt3R]]` — referenced by 3 pages. Suggestion: auto-create stub (high confidence)
-
-   ## Contradictions
-   - `sources/paper-a.md` vs `sources/paper-b.md`: DLSS3 frame pacing. Suggestion: favor paper-b (medium confidence)
-   ```
+3. Build structured summary per category (path + description + LLM suggestion).
 
 4. Present the summary per category: *"Phantom Hubs: 3 eligible. Create stubs? (Y/n)"* etc. User answers per category or skips all.
 5. On user confirmation, execute:
@@ -339,13 +274,7 @@ Use `--save` for `wiki/health-report.md`.
 
 Triggered by: *"build graph"* or *"graph report"*
 
-First try: `python tools/build_graph.py --open`
-
-If Python/deps unavailable, build manually:
-1. Search for all `[[wikilinks]]` across wiki pages
-2. Build nodes and edges
-3. Infer implicit relationships — tag `INFERRED` with confidence score; low confidence → `AMBIGUOUS`
-4. Write `graph/graph.json` and `graph/graph.html`
+Run: `python tools/build_graph.py --open`
 
 Use `--report` flag for structured graph health:
 - **Health summary** — edges/node ratio, orphan %, community count, link density
