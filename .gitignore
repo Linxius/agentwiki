@@ -39,6 +39,7 @@ raw/talks/
 raw/docs/
 raw/datasets/
 raw/digest/sources/
+raw/digest/*/sources/
 
 # === 本地配置 ===
 config.local.json
