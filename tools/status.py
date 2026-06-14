@@ -96,8 +96,18 @@ def check_feeds():
     return results
 
 
+TRIGGER_WORDS = {
+    "处理 inbox 链接": "inbox",
+    "filter 筛选": "filter",
+    "生成深度阅读": "deep read",
+    "合入 wiki": "ingest from digest",
+    "拉取 feeds": "feeds",
+    "拉取 feeds（首次）": "feeds",
+}
+
+
 def suggest_next(brief, inbox_links, inbox_files, feeds):
-    """Suggest next pipeline step."""
+    """Suggest next pipeline step with trigger words."""
     steps = []
 
     if inbox_links > 0:
@@ -126,7 +136,9 @@ def suggest_next(brief, inbox_links, inbox_files, feeds):
 
     if not steps:
         return "无待办事项"
-    return " → ".join(dict.fromkeys(steps))
+
+    steps = list(dict.fromkeys(steps))
+    return " → ".join(f"{s}（触发词: {TRIGGER_WORDS[s]}）" for s in steps)
 
 
 def run_status():
