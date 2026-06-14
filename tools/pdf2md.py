@@ -93,6 +93,12 @@ def convert_arxiv(arxiv_id: str, output: Path) -> Path:
         sys.exit(1)
 
     print(f"  ✓ Converted arXiv {arxiv_id} → {output.relative_to(REPO_ROOT)}")
+
+    # Clean up arxiv2md cache
+    cache_dir = REPO_ROOT / ".arxiv2md_cache"
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
     return output
 
 
