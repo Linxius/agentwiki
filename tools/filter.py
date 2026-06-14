@@ -379,8 +379,8 @@ def move_source(file_path: Path, date_str: str):
     return dest_md
 
 
-def clear_inbox():
-    """Clear inbox/ directory (keep inbox.md, empty its content)."""
+def clear_inbox(skip_rel_paths: set[str] | None = None):
+    """Clear inbox/ directory (keep inbox.md, empty its content). Keep files in skip_rel_paths."""
     if not INBOX_DIR.exists():
         return
     inbox_files = list(INBOX_DIR.iterdir())
@@ -388,18 +388,27 @@ def clear_inbox():
         print("  inbox/ 已为空。")
         return
 
+    skipped = set()
+    if skip_rel_paths:
+        # convert rel paths to just filenames for comparison
+        skipped = {Path(p).name for p in skip_rel_paths}
+
     count = 0
     for f in inbox_files:
         if f.name == "inbox.md":
             f.write_text("# Inbox\n", encoding="utf-8")
             print("  📝 清空 inbox.md 内容")
             continue
+        if f.name in skipped:
+            print(f"  ⏭️  跳过失败文件: {f.name}")
+            continue
         if f.is_file():
             f.unlink()
         elif f.is_dir():
             shutil.rmtree(f)
         count += 1
-    print(f"  ✅ 已清空 inbox/ ({count} 个文件)")
+    if count:
+        print(f"  ✅ 已清空 inbox/ ({count} 个文件)")
 
 
 def append_log(entry: str):
@@ -426,11 +435,14 @@ def save_filter_cache(cache: dict):
 
 
 def rebuild_results_from_cache(cache: dict) -> list[dict]:
-    """Rebuild results list from cache, converting rel paths back to Path objects."""
+    """Rebuild results list from cache, skipping fallback/failed entries."""
     results = []
     for rel_path, entries in cache.items():
         abs_path = (REPO_ROOT / rel_path).resolve()
         for entry in entries:
+            # Skip cached failed entries — they'll be retried next time
+            if "LLM failed" in entry.get("reason", ""):
+                continue
             entry["file"] = abs_path
             results.append(entry)
     return results
@@ -491,6 +503,8 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
         else:
             pending.append((file_path, rel))
 
+    failed_files: set[str] = set()  # track failed rel paths
+
     if pending:
         print(f"\n需分析 {len(pending)} 个文件（并行 max_workers=2）:\n")
 
@@ -515,25 +529,11 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                         print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
                 except Exception as e:
                     print(f"  ⚠️  {fp.name} failed: {e}")
-                    src = extract_source_url(fp)
-                    fallback = [{
-                        "file": rel,
-                        "item_id": 1,
-                        "match_level": "not_interested",
-                        "matched_interests": [],
-                        "reason": f"LLM failed: {e}",
-                        "suggested_category": "papers",
-                        "title": fp.stem,
-                        "brief": f"Analysis failed for '{fp.name}'.",
-                        "detailed_report": f"No report available.",
-                        "source_url": src,
-                    }]
-                    cache[rel] = fallback
-                    save_filter_cache(cache)
+                    failed_files.add(rel)
     else:
         print(f"\n所有文件均已缓存（{skipped_from_cache} 个）。")
 
-    # Rebuild full results from cache
+    # Rebuild full results from cache (skips cached failures)
     results = rebuild_results_from_cache(cache)
 
     # Inject source URL into each file's frontmatter before moving
@@ -548,7 +548,7 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     priority = {"interested": 0, "possibly_interested": 1, "not_interested": 2}
     results.sort(key=lambda x: priority.get(x["match_level"], 3))
 
-    # Generate brief.md
+    # Generate brief.md (only successful entries)
     today = date.today().isoformat()
     brief_content = generate_brief_entries(results, today)
 
@@ -569,7 +569,7 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                 except Exception as e:
                     print(f"    ⚠️  move failed: {e}")
 
-        clear_inbox()
+        clear_inbox(skip_rel_paths=failed_files)
 
         # Clear checkpoint cache
         if FILTER_CACHE.exists():
@@ -578,6 +578,8 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
 
     # Log
     log_entry = f"## [{date.today().isoformat()}] filter | {len(results)} files processed"
+    if failed_files:
+        log_entry += f" ({len(failed_files)} failed)"
     append_log(log_entry)
 
     if json_output:
@@ -596,6 +598,16 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
         print(json.dumps(json_results, indent=2, ensure_ascii=False))
         return
 
+    # Save failed files list for retry
+    if failed_files:
+        failed_paths = sorted(failed_files)
+        failed_txt = REPO_ROOT / "raw" / ".filter-failed.txt"
+        failed_txt.parent.mkdir(parents=True, exist_ok=True)
+        content = "# 失败文件列表（LLM 连接错误）\n# 重跑: python tools/filter.py --retry-failed\n# {} files\n\n".format(len(failed_paths))
+        content += "\n".join(failed_paths) + "\n"
+        failed_txt.write_text(content, encoding="utf-8")
+        print(f"\n⚠️ {len(failed_paths)} 个文件分析失败，已保存到 {failed_txt.relative_to(REPO_ROOT)}")
+
     print(f"\n✅ 筛选完成！报告已保存到: {BRIEF_FILE.relative_to(REPO_ROOT)}")
 
 
@@ -604,6 +616,7 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without moving files")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
     parser.add_argument("--clear-cache", action="store_true", help="Clear checkpoint cache and re-analyze all files")
+    parser.add_argument("--retry-failed", action="store_true", help="Re-process files listed in raw/.filter-failed.txt")
     args = parser.parse_args()
 
     if args.clear_cache:
@@ -613,5 +626,37 @@ if __name__ == "__main__":
         else:
             print("缓存不存在，无需清理")
         sys.exit(0)
+
+    if args.retry_failed:
+        failed_file = REPO_ROOT / "raw" / ".filter-failed.txt"
+        if not failed_file.exists():
+            print("失败列表不存在: raw/.filter-failed.txt")
+            sys.exit(1)
+        lines = failed_file.read_text(encoding="utf-8").splitlines()
+        paths = [l.strip() for l in lines if l.strip() and not l.startswith("#")]
+        if not paths:
+            print("失败列表为空")
+            sys.exit(0)
+        moved = 0
+        cache = load_filter_cache()
+        for p in paths:
+            src = (REPO_ROOT / p).resolve()
+            cache.pop(p, None)
+            if not src.exists():
+                continue
+            dst = (INBOX_DIR / src.name).resolve()
+            if src == dst:
+                continue  # already in inbox
+            shutil.move(str(src), str(dst))
+            moved += 1
+        if moved or paths:
+            save_filter_cache(cache)
+            print(f"已清除 {len(paths)} 个缓存条目，移动 {moved} 个文件到 inbox/")
+        os.remove(str(failed_file))
+        print()
+
+    if args.retry_failed or args.clear_cache:
+        # Force fresh analysis
+        pass  # run_filter handles both cases
 
     run_filter(dry_run=args.dry_run, json_output=args.json)
