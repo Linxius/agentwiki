@@ -38,6 +38,8 @@ except ImportError:
     HAS_NETWORKX = False
     print("Warning: networkx not installed. Community detection disabled. Run: pip install networkx")
 
+from _utils import read_file
+
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
 GRAPH_DIR = REPO_ROOT / "graph"
@@ -62,10 +64,6 @@ EDGE_COLORS = {
     "INFERRED": "#FF5722",
     "AMBIGUOUS": "#BDBDBD",
 }
-
-
-def read_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
 def call_llm(prompt: str, model_env: str, default_model: str, max_tokens: int = 4096) -> str:

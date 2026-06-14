@@ -34,12 +34,14 @@ Describe what you want in plain English or use shorthand triggers:
 | `health` | 结构完整性检查（快速，无 LLM） |
 | `lint` | 内容质量检查（慢，需要 LLM） |
 | `build graph` | 构建知识图谱 |
+| `heal` | 自动补全缺失的实体/概念页 |
+| `refresh` | 重新 ingest 已变更的源文档 |
 
 ### Query Triggers
 
 | 触发词 | 动作 |
 |---|---|
-| `query: <question>` | 基于 wiki 内容回答 |
+| `query: <question>` | 基于 wiki 内容回答（`python tools/query.py`） |
 | *plain question* | 描述需求，如 "ingest this file: raw/papers/...md" |
 
 ### Agent Proactive Reminders
@@ -53,7 +55,12 @@ The agent should proactively detect and remind about:
 
 ### Status Auto-Detect
 
-When user triggers `status` / `流程状态`, the agent checks:
+Run `python tools/status.py` — script checks pipeline state and suggests next step.
+
+`python tools/status.py --blockers` — show what blocks each step.
+`python tools/status.py --next filter` — exit 0/1 if step can run (useful for scripting).
+
+Legacy manual check (if script unavailable):
 
 | 检查点 | 读什么 | 判断 |
 |---|---|---|
@@ -62,7 +69,8 @@ When user triggers `status` / `流程状态`, the agent checks:
 | brief 最近简报 | `raw/digest/brief.md` | 是否存在、是否有内容 |
 | 待深度阅读 | `raw/digest/brief.md` | 扫描 `[x] 深度阅读` 条目 |
 | 待合入 wiki | `raw/digest/brief.md` | 扫描 `[x] 合入 wiki` 条目 |
-| feeds 上次拉取 | `raw/.feeds-state.json` | 读取各源 `last_fetch_date` |
+| feeds 配置 | `config.json` → `feeds.sources` | 已配置源的名称和数量 |
+| feeds 上次拉取 | `raw/.feeds-state.json` | 读取各源 `last_fetch_date`，为空表示从未拉取 |
 
 输出格式示例：
 ```
@@ -72,29 +80,9 @@ When user triggers `status` / `流程状态`, the agent checks:
 3. brief: 2026-06-14 简报已生成
 4. deep-read: 2 checked, 0 done
 5. ingest: 1 checked, 0 done
-6. feeds: 上次拉取 2026-06-14（1天前）
+6. feeds: 已配置 1 个源，上次拉取 2026-06-14（1天前）
 
 → 建议: 处理 inbox → filter → 生成深度阅读 → 合入 wiki
-```
-
-## Brief.md Format
-
-```markdown
-# 资讯简报  2025-06-10
-
-## [感兴趣]
-
-### article1.pdf
-- 来源: https://arxiv.org/abs/xxx.xxxxx
-- 匹配: transformers, attention
-- 理由: 核心主题与用户兴趣高度相关
-- [x] 深度阅读
-- [ ] 合入 wiki
-
-**简介**：LLM 3-5 句简介...
-
-**详细报告**：
-500-800 字详细报告...
 ```
 
 ## Status Flow
@@ -106,42 +94,17 @@ When user triggers `status` / `流程状态`, the agent checks:
 ## Directory Layout
 
 ```
-raw/          # Source documents
-  inbox/      # Pending filter — new materials arrive here
-    inbox.md  # User adds links here (arXiv IDs, URLs), processed by tools/inbox.py
-  digest/     # Digest of filtered results
-    brief.md  # Today's brief report with entries sorted by interest match
-    YYYY-MM-DD/
-      deepdive-*.md  # Deep-dive reading reports (generated after user confirmation)
-      sources/       # Original files moved during filter
-    brief/      # Archived brief reports (YYYY-MM-DD.md)
-  filter/     # Legacy filter reports
-  papers/     # Academic papers
-  articles/   # Blogs, tutorials, reports
-  talks/      # Conference talks, slides
-  books/      # Books
-  projects/   # Projects, codebases
-  docs/       # Documentation, whitepapers
-  datasets/   # Datasets, benchmarks
-wiki/         # Agent owns this layer entirely
-  index.md    # Catalog of all pages — update on every ingest
-  log.md      # Append-only chronological record
-  overview.md # Living synthesis across all sources
-  issues.md   # Known issues: pending entities, phantom links, contradictions, etc.
-  interests.md # User interests for filter matching
-  sources/    # One summary page per source document
-  entities/   # People, companies, projects, products
-  concepts/   # Ideas, frameworks, methods, theories
-  syntheses/  # Saved query answers
-graph/        # Auto-generated graph data
-tools/        # Standalone Python scripts
-  inbox.py    # Process inbox.md links into markdown files in raw/inbox/
-  health.py   # Structural checks (deterministic, no LLM calls)
-  lint.py     # Content quality checks (uses LLM for semantic analysis)
-  build_graph.py  # Knowledge graph generation
-  filter.py   # Filter and classify raw/inbox/ files → generates raw/digest/brief.md
-  deep-read.py  # Generate deep-dive reports from checked brief entries
-  ingest.py   # Ingest source documents into wiki (supports --from-digest)
+raw/          inbox/  inbox.md  (link queue)
+              inbox/  YYYY-MM-DD/  *.md  (fetched content)
+              digest/  brief.md  YYYY-MM-DD/{deepdive-*/,sources/}  brief/
+              filter/ papers/ articles/ talks/ books/ projects/ docs/ datasets/
+wiki/         index.md log.md overview.md issues.md interests.md
+              sources/ entities/ concepts/ syntheses/
+graph/        (auto-generated graph data)
+templates/    generic.md paper.md article.md book.md dataset.md doc.md project.md talk.md
+tools/        inbox.py health.py lint.py build_graph.py filter.py deep-read.py
+              download-images.py ingest.py status.py validate-wiki.py
+              heal.py refresh.py query.py file_to_md.py pdf2md.py
 ```
 
 ## Link Inbox → Filter → Deep Read → Ingest Workflow
@@ -246,27 +209,20 @@ Triggered by: *"ingest <file>"*
 **Supported formats:** Markdown (`.md`) is ingested directly. Non-markdown files (`.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) are auto-converted to markdown via [markitdown](https://github.com/microsoft/markitdown) before ingestion. PDF files, arXiv IDs, or arXiv URLs are processed via `tools/pdf2md.py`. Use `--no-convert` to skip auto-conversion.
 
 Steps (in order):
-1. **PDF preprocessing** (only for `.pdf` files) — **NEVER use the Read tool to directly read `.pdf` files**. Always run `tools/pdf2md.py <path-to-pdf>` first (timeout at least 600000ms). The script handles conversion, title extraction, PDF rename, and images. Then read the generated `.md` file and continue with the rest of the workflow.
-2. **Book splitting** (if source is under `raw/books/`):
-   - **If source is a directory** (Form B): skip splitting, use existing chapter files under `sourceFile/`.
-   - **If source is a single file** (Form A): split into chapters by scanning `##` or `#` heading boundaries. Generate `raw/books/<slug>/sourceFile/ch-<NN>-<topic>.md` files. Delete the original single file after splitting. Then continue with directory mode.
-3. Read the source document fully — extract original URL (from `url:` frontmatter, arXiv ID in filename, or URLs in content). If none found, ask the user to provide one.
-4. Read `wiki/index.md` and `wiki/overview.md` for current wiki context
-5. Write source page(s):
-   - **For books (Form B)**: write `wiki/sources/<book-slug>/overview.md` (overview page) + `wiki/sources/<book-slug>/ch-<NN>-<topic>.md` (one per chapter). Use the Book Directory Template.
-   - **For all other sources**: write `wiki/sources/<slug>.md` using the appropriate source-type template.
-   - Set `source_file` frontmatter to the repo-relative raw file path (e.g. `raw/papers/foo.pdf`).
-   - Set `url` frontmatter to the original source URL (if available, else `""`).
-   - In the body, include a `## 原始出处` section with both the raw file link and the original URL.
-6. **Download images** — scan source pages for external image URLs (`http://`, `https://`, `data:image/`), download to `wiki/images/<slug>/`, and update paths to `../images/<slug>/filename`. For books, use `wiki/images/<book-slug>/ch<N>/`.
-7. Update `wiki/index.md` — add entry under Sources section. For books (Form B), add only one link to the overview page (e.g., `- [Book Title](sources/<book-slug>/overview.md)`).
-8. Update `wiki/overview.md` — revise synthesis if warranted
-9. Update/create entity pages for key companies, projects, products mentioned — **DO NOT create entity pages for authors or individual people when ingesting academic papers**
-10. Update/create concept pages for key ideas and frameworks discussed
-11. If the paper compares with important related work, create source pages for those compared works
-12. Flag any contradictions with existing wiki content — append to `wiki/issues.md` under Contradictions section
-13. Append to `wiki/log.md`: `## [YYYY-MM-DD] ingest | <Title>`
-14. **Post-ingest validation** — check for broken `[[wikilinks]]`, verify all new pages are in `index.md`, print a change summary. Append any broken wikilinks to `wiki/issues.md` under Phantom Links section.
+1. **PDF preprocessing** — run `tools/pdf2md.py <path-to-pdf>` first (timeout ≥600s). Then read the `.md` output.
+2. **Book splitting** — directory (Form B): use existing chapter files. Single file (Form A): split by `##`/`#` headings into `raw/books/<slug>/sourceFile/ch-*.md`, delete original.
+3. Extract original URL from frontmatter, arXiv ID, or content — if none found, ask user.
+4. Read `wiki/index.md` + `wiki/overview.md` for context.
+5. Write source page(s) using the corresponding template (see `templates/`). Set `source_file` to repo-relative raw path, `url` to original URL, include `## 原始出处` section.
+6. **Download images** — run `tools/download-images.py <slug>` to fetch external images to `wiki/images/<slug>/` and update paths.
+7. Update `wiki/index.md` — add entry under Sources section.
+8. Update `wiki/overview.md` — revise synthesis if warranted.
+9. Update/create entity pages for companies, projects, products — **DO NOT** create for authors of academic papers.
+10. Update/create concept pages for key ideas and frameworks.
+11. If paper compares with important related work, create source pages for those works.
+12. Flag contradictions — append to `wiki/issues.md` under Contradictions.
+13. Append to `wiki/log.md`: `## [YYYY-MM-DD] ingest | <Title>`.
+14. **Post-ingest validation** — run `python tools/validate-wiki.py` to check for broken `[[wikilinks]]`, verify all new pages in `index.md`. Append broken links to `wiki/issues.md` under Phantom Links.
 15. Run `health` as post-ingest integrity check.
 
 ### Important Concept Distinction
@@ -282,398 +238,14 @@ Example from Mob-FGSR:
 
 This prevents conflation of different implementations of the same high-level idea.
 
-### Source Page Format
-
-所有 source 页面使用的通用模板（可根据具体内容调整，不需要完全遵从）：
-
-```markdown
----
-title: "Source Title"
-type: source
-tags: []
-date: YYYY-MM-DD
-source_file: raw/...
-url: ""           # 原始出处 URL
-links: []         # 代码或项目链接
----
-
-## Summary
-2–4 sentence summary.
-
-## 原始出处
-- 原始文件: [{source_file}]({source_file}) （相对于 source 页面的路径）
-- 原文链接: [{url}]({url})
-
-## Key Points
-- Point 1
-- Point 2
-
-## Relevance
-与 [[EntityName]] 或 [[ConceptName]] 的关联。
-
-## Connections
-- [[EntityName]] — how they relate
-- [[ConceptName]] — how it connects
-
-## Contradictions
-- Contradicts [[OtherPage]] on: ...
-```
-
 ### Source-Type Templates
 
-If the source file path starts with `raw/articles/`, `raw/books/`, `raw/datasets/`, `raw/docs/`, `raw/papers/`, `raw/projects/`, or `raw/talks/`, use the corresponding template below instead of the default generic one above.
+All source pages use templates under `templates/`:
 
-#### Paper Template (`raw/papers/`)
-```markdown
----
-title: "Paper Title"
-type: source
-tags: [paper]
-date: YYYY-MM-DD
-source_file: raw/papers/...
-url: ""           # 原始出处 URL（arxiv、doi、项目页等）
-venue: ""          # 会议或期刊名，如 CVPR 2025
-published: YYYY    # 发表年份
-links: []          # 代码或项目链接
----
+- [Generic Template](templates/generic.md) (fallback)
+- [Paper](templates/paper.md) / [Article](templates/article.md) / [Book](templates/book.md) / [Dataset](templates/dataset.md) / [Doc](templates/doc.md) / [Project](templates/project.md) / [Talk](templates/talk.md)
 
-## Summary
-2–4 句概述论文解决的问题、核心方法和主要贡献。
-
-## 原始出处
-- 原始文件: [{source_file}](../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Key Contributions
-- Contribution 1
-- Contribution 2
-
-## Method
-详细描述论文的核心方法、技术流程、算法步骤和实现细节。包括模型架构、训练策略、关键模块设计、数据流和推理过程。避免泛泛而谈，要写出可复现的技术细节。
-
-核心架构概览，包括 pipeline 结构、输入输出、关键模块及其交互关系。可使用流程图辅助说明。
-
-**模块/组件细节**：
-- **组件 1**: 功能、设计选择和数学公式（如有）
-- **组件 2**: 同上
-
-**论文中的框架图、流程图、步骤图等必须写入**：引用时使用 `![描述](../images/<source-slug>/文件名)` 格式（注意路径相对于 `wiki/sources/`），图片放在对应标题下方并附简要文字说明。不要遗漏任何与技术流程相关的图示。
-
-**下载外部图片**：所有图片必须保存在本地 `wiki/images/<source-slug>/` 目录下。使用 `curl` 或 `wget` 下载图片到该目录，图片文件名保持简洁（如 `pipeline.png`、`architecture.png`、`results.png`）。如果源文档中图片是 base64 嵌入，需提取并保存为独立图片文件。
-
-## Training
-- 目标函数 / Loss 设计
-- 训练策略、超参数、调度器
-- 数据需求与预处理
-
-## Results & Comparisons
-总结论文的实验结果，特别是与相关工作中其他方法的对比数据。包括指标对比、优劣分析。如果对比了重要工作，记录对比结果，并分析论文方法与对应相关工作的**相同点和不同点**（设计思路、假设条件、适用场景等）。
-
-## Related Work Analysis
-如果论文本身没有在 Results 中详细对比某个重要相关工作，在此处补充：列出论文与该工作的关键异同，包括技术路线、假设条件和性能差异。
-
-## Ablations
-关键消融实验及其结论，提炼每个消融揭示的设计原则。
-
-## Limitations
-论文自述的局限性，或 reviewer 指出的问题。
-
-## Connections
-- [[EntityName]] — how they relate
-- [[ConceptName]] — how it connects
-
-## Contradictions
-- Contradicts [[OtherPage]] on: ...
-```
-
-#### Article Template (`raw/articles/`)
-```markdown
----
-title: "Article Title"
-type: source
-tags: [article]
-date: YYYY-MM-DD
-source_file: raw/articles/...
-url: ""           # 原始出处 URL（博客、新闻、教程等）
----
-
-## Summary
-2–4 sentence summary.
-
-## 原始出处
-- 原始文件: [{source_file}](../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Key Points
-- Point 1
-- Point 2
-
-## Analysis
-深度分析文章的核心论点、论据和结论。包括作者立场、数据支撑、逻辑链条。
-
-## Relevance
-与 [[EntityName]] 或 [[ConceptName]] 的关联。
-
-## Contradictions
-- Contradicts [[OtherPage]] on: ...
-```
-
-#### Book Template (`raw/books/`)
-
-Books can be ingested in two forms:
-
-**Form A — Single markdown file** (e.g., PDF converted to one large MD): follows the single-page template below.
-
-**Form B — Directory with pre-split chapter files** (e.g., `raw/books/<book>/sourceFile/ch-*.md`): generates an overview page + one source page per chapter.
-
-In both forms, the ingest workflow handles splitting (see [Ingest Workflow](#ingest-workflow)).
-
-##### Single File Template (Form A)
-```markdown
----
-title: "Book Title"
-type: source
-tags: [book]
-date: YYYY-MM-DD
-source_file: raw/books/...
-url: ""           # 原始出处 URL（如有）
----
-
-## Summary
-2–4 sentence summary of the book.
-
-## 原始出处
-- 原始文件: [{source_file}](../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Structure
-- Chapter N: [Title] — key idea
-- Chapter N: [Title] — key idea
-
-## Key Concepts
-- [[ConceptName]] — how it connects
-
-## Connections
-- [[EntityName]] — how they relate
-
-## Contradictions
-- Contradicts [[OtherPage]] on: ...
-```
-
-##### Book Directory Template (Form B)
-
-###### Overview Page (`wiki/sources/<book-slug>/overview.md`)
-```markdown
----
-title: "Book Title"
-type: source
-tags: [book]
-date: YYYY-MM-DD
-source_file: raw/books/<book>/
-url: ""           # 原始出处 URL（如有）
----
-
-## Summary
-2–4 sentence summary of the book.
-
-## 原始出处
-- 原始文件: [{source_file}](../../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Chapters
-- [[Ch01Introduction|Ch1: Introduction]]
-- [[Ch02GraphicsPipeline|Ch2: Graphics Pipeline]]
-- ...
-
-## Key Concepts
-- [[ConceptName]] — how it connects
-
-## Connections
-- [[EntityName]] — how they relate
-
-## Contradictions
-- Contradicts [[OtherPage]] on: ...
-```
-
-###### Chapter Page (`wiki/sources/<book-slug>/ch-<NN>-<topic>.md`)
-```markdown
----
-title: "Ch<N>: Chapter Title"
-type: source
-tags: [book-chapter]
-date: YYYY-MM-DD
-source_file: raw/books/<book>/sourceFile/...
-url: ""           # 原始出处 URL（如有）
-book: "Book Title"
----
-
-## Summary
-2–4 sentence summary of the chapter.
-
-## 原始出处
-- 原始文件: [{source_file}](../../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Key Points
-- Point 1
-- Point 2
-
-## Key Concepts
-- [[ConceptName]] — how it connects
-
-## Connections
-- [[ChapterX]] — how it relates to other chapters
-- [[EntityName]] — how they relate
-```
-
-#### Dataset Template (`raw/datasets/`)
-```markdown
----
-title: "Dataset Name"
-type: source
-tags: [dataset]
-date: YYYY-MM-DD
-source_file: raw/datasets/...
-url: ""           # 原始出处 URL（数据集页面）
-code_url: ""
----
-
-## Summary
-2–4 sentence description.
-
-## 原始出处
-- 原始文件: [{source_file}](../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Statistics
-- Size: ...
-- Splits: ...
-- Annotation types: ...
-
-## Collection Methodology
-如何收集、标注、清洗数据的。
-
-## Key Characteristics
-- Unique aspects vs similar datasets
-
-## Usage
-常见使用场景和基准任务。
-
-## Connections
-- [[EntityName]] — how they relate
-- [[ConceptName]] — how it connects
-```
-
-#### Doc Template (`raw/docs/`)
-```markdown
----
-title: "Document Title"
-type: source
-tags: [doc]
-date: YYYY-MM-DD
-source_file: raw/docs/...
-url: ""           # 原始出处 URL（如有）
----
-
-## Summary
-2–4 sentence summary.
-
-## 原始出处
-- 原始文件: [{source_file}](../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Architecture / Design
-核心架构概述、技术选型、模块划分和数据流。
-
-## Installation
-环境和依赖安装步骤。
-
-## Usage
-基本用法和典型示例。
-
-## Key Sections
-- Section — key content
-
-## Key Takeaways
-- Takeaway 1
-- Takeaway 2
-
-## Connections
-- [[EntityName]] — how they relate
-- [[ConceptName]] — how it connects
-```
-
-#### Project Template (`raw/projects/`)
-```markdown
----
-title: "Project Name"
-type: source
-tags: [project]
-date: YYYY-MM-DD
-source_file: raw/projects/...
-url: ""           # 原始出处 URL（项目页面、博客等）
-code_url: ""
----
-
-## Summary
-2–4 sentence description.
-
-## 原始出处
-- 原始文件: [{source_file}](../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Goals & Motivation
-
-## Architecture / Design
-核心架构、技术选型、模块划分。
-
-## Installation
-环境和依赖安装步骤。
-
-## Usage
-安装后的基本用法和典型示例。
-
-## Key Results
-- Result 1
-- Result 2
-
-## Connections
-- [[EntityName]] — how they relate
-- [[ConceptName]] — how it connects
-```
-
-#### Talk Template (`raw/talks/`)
-```markdown
----
-title: "Talk Title"
-type: source
-tags: [talk]
-date: YYYY-MM-DD
-source_file: raw/talks/...
-url: ""           # 原始出处 URL（视频页面、幻灯片等）
----
-
-## Summary
-2–4 sentence summary.
-
-## 原始出处
-- 原始文件: [{source_file}](../../{source_file})
-- 原文链接: [{url}]({url})
-
-## Key Points
-- Point 1
-- Point 2
-
-## Speaker's Argument
-演讲者的核心论点、论据和结论。
-
-## Connections
-- [[EntityName]] — how they relate
-- [[ConceptName]] — how it connects
-
-## Contradictions
-- Contradicts [[OtherPage]] on: ...
-```
+Matched by: `raw/{papers,articles,books,datasets,projects,talks}/` prefix in source file path.
 
 ---
 
@@ -706,43 +278,20 @@ Triggered by: *"lint"*
    - **Misclassification** — pages whose `type: entity|concept` seems wrong given their content; LLM suggests the correct type
    - **Data gaps** — questions the wiki can't answer; LLM suggests new source types to seek
 
-3. Build a structured summary grouped by category, listing each item with:
-   - File path
-   - Brief description of the issue
-   - LLM's suggestion (action + confidence)
-   - Example:
-     ```
-     ## Orphan Pages
-     - `entities/VGGT.md` — 2 outbound links, no inbound. Suggestion: merge into sources/mob-fgsr.md (high confidence)
-     - `concepts/FrameGeneration.md` — 0 links total. Suggestion: delete (high confidence)
-
-     ## Broken Links (Phantom Hubs)
-     - `[[DUSt3R]]` — referenced by 3 pages. Suggestion: auto-create stub entity page (high confidence)
-     - `[[MegaSaM]]` — referenced by 1 page. Recorded to issues.md, no action needed.
-
-     ## Contradictions
-     - `sources/paper-a.md` vs `sources/paper-b.md`: claims about DLSS3 frame pacing. Suggestion: resolve in favor of paper-b (medium confidence)
-
-     ## Pending Entities
-     - `[[VGGT]]` — referenced by 5 pages. Suggestion: create entity page (high confidence)
-     - `[[DUSt3R]]` — referenced by 3 pages. Suggestion: create entity page (medium confidence)
-
-     ## Misclassification
-     - `concepts/DUSt3R.md` — describes a specific model, not a general concept. Suggestion: reclassify as entity (high confidence)
-     - `entities/FrameGeneration.md` — describes a broad technique category. Suggestion: reclassify as concept (high confidence)
-     ```
-
-4. Present the summary to the user with a prompt for each actionable category:
+3. Build a structured summary grouped by category with file path, description, and LLM suggestion:
    ```
-   Phantom Hubs: 3 eligible for auto-create. Create stub pages? (Y/n)
-   Orphan pages: 2 candidates. Archive/delete them? (Y/n)
-   Contradictions: 1 found. Apply suggested resolution? (Y/n)
-   Pending Entities: 2 eligible for creation. Create pages? (Y/n)
-   Misclassification: 2 found. Apply reclassifications? (Y/n)
-   ```
-   The user can answer per category or skip all.
+   ## Orphan Pages
+   - `entities/VGGT.md` — 2 outbound links, no inbound. Suggestion: merge (high confidence)
 
-5. On user confirmation, execute the actions:
+   ## Broken Links
+   - `[[DUSt3R]]` — referenced by 3 pages. Suggestion: auto-create stub (high confidence)
+
+   ## Contradictions
+   - `sources/paper-a.md` vs `sources/paper-b.md`: DLSS3 frame pacing. Suggestion: favor paper-b (medium confidence)
+   ```
+
+4. Present the summary per category: *"Phantom Hubs: 3 eligible. Create stubs? (Y/n)"* etc. User answers per category or skips all.
+5. On user confirmation, execute:
    - Auto-create stub entity/concept pages for phantom hubs (no frontmatter beyond title+type, one-line description)
    - Tag orphan pages with `archived: true` in frontmatter or move to `wiki/archived/`
    - Append contradiction annotations to affected pages
@@ -754,86 +303,58 @@ Triggered by: *"lint"*
 
 ---
 
-## Filter Workflow
-
-Triggered by: *"filter"*
-
-Scan `raw/inbox/`, match against `wiki/interests.md`, and classify files.
-
-Steps:
-1. Scan `raw/inbox/` for supported files
-2. Read `wiki/interests.md` for current interests
-3. Use LLM to do full-text semantic matching against interests
-4. Rank results by match level: 感兴趣/可能感兴趣/不感兴趣
-5. Output Markdown report to `raw/filter/filter-YYYY-MM-DD.md`
-   - Same day: append new batch, mark old entries as [已筛选]
-   - Each entry: title, description, matched interests, suggested category, checkbox
-6. Interactive confirmation: user selects files to keep
-7. Move files to corresponding category (papers/articles/talks/books/docs/projects/datasets)
-8. Prompt to clear `inbox/` after successful classification
-9. Append to `wiki/log.md`: `## [YYYY-MM-DD] filter | N files classified`
-
 ### interests.md Format
 
-```yaml
----
-title: "兴趣点"
-type: synthesis
-tags: [interests]
-sources: []
-last_updated: YYYY-MM-DD
----
+See `wiki/interests.md` for current content. Format:
 
-## [Category Name]
+```yaml
+## [Category]
 - name: Interest Name
   weight: 0.9
-  keywords: [keyword1, keyword2]
-  description: Fuzzy description for matching
+  keywords: [kw1, kw2]
+  description: ...
 ```
 
 ## Health Workflow
 
-Triggered by: *"health"*
+Triggered by: *"health"* — `python tools/health.py` (zero LLM calls).
 
-Run: `python tools/health.py` (or `python tools/health.py --json` for machine-readable output)
+Checks (auto-fix, no confirmation needed):
+- Empty/stub files (auto-delete)
+- Index sync (auto-sync stale/missing entries)
+- Log coverage (auto-append missing ingest entries)
 
-Fast structural integrity checks — **zero LLM calls**, safe to run every session:
-- **Empty / stub files** — pages with no content beyond frontmatter (rate-limit damage). Auto-delete.
-- **Index sync** — `wiki/index.md` entries vs actual files on disk. Auto-sync (remove stale entries, warn on missing pages).
-- **Log coverage** — source pages missing a corresponding `ingest` entry in `wiki/log.md`. Auto-append.
+Use `--save` for `wiki/health-report.md`.
 
-No user confirmation needed for any fix. Output a health report after repair. Use `--save` to write to `wiki/health-report.md`.
-
----
-
-### Health vs Lint Boundary
-
-| Dimension | `health` | `lint` |
+| vs `lint` | `health` | `lint` |
 |---|---|---|
-| **Scope** | Structural integrity | Content quality |
-| **LLM calls** | Zero | Yes (semantic analysis) |
-| **Cost** | Free | Tokens |
-| **Frequency** | Every session, before other work | Every 10-15 ingests |
-| **Checks** | Empty files, index sync, log sync | Orphans, broken links, contradictions, gaps |
-| **Tool** | `tools/health.py` | `tools/lint.py` |
-| **Run order** | First (pre-flight) | After health passes |
-
-> Run `health` first — linting an empty file wastes tokens.
+| Scope | Structural | Content quality |
+| LLM | Zero | Yes |
+| Frequency | Every session | 10-15 ingests |
+| Run order | First | After health passes
 
 ---
 
 ## Graph Workflow
 
-Triggered by: *"build graph"*
+Triggered by: *"build graph"* or *"graph report"*
 
 First try: `python tools/build_graph.py --open`
 
 If Python/deps unavailable, build manually:
 1. Search for all `[[wikilinks]]` across wiki pages
-2. Build nodes (one per page) and edges (one per link)
-3. Infer implicit relationships not captured by wikilinks — tag `INFERRED` with confidence score; low confidence → `AMBIGUOUS`
-4. Write `graph/graph.json` with `{nodes, edges, built: date}`
-5. Write `graph/graph.html` as a self-contained vis.js visualization
+2. Build nodes and edges
+3. Infer implicit relationships — tag `INFERRED` with confidence score; low confidence → `AMBIGUOUS`
+4. Write `graph/graph.json` and `graph/graph.html`
+
+Use `--report` flag for structured graph health:
+- **Health summary** — edges/node ratio, orphan %, community count, link density
+- **Orphan nodes** — pages with zero graph connections
+- **God nodes** — hub pages with degree > μ+2σ
+- **Fragile bridges** — community pairs connected by only 1 edge
+- **Phantom hubs** — `[[wikilinks]]` referenced by 2+ existing pages but pointing to non-existent pages
+
+Use `--save` to write report to `graph/graph-report.md`.
 
 ---
 
@@ -843,67 +364,15 @@ If Python/deps unavailable, build manually:
 - Entity pages: `TitleCase.md` (e.g. `OpenAI.md`, `SamAltman.md`)
 - Concept pages: `TitleCase.md` (e.g. `ReinforcementLearning.md`, `RAG.md`)
 
-## Index Format
+## Index & Log Format
 
-```markdown
-# Wiki Index
+Index: `## {Section}\n- [Title](path) — one-line`. See `wiki/index.md` for current structure.
 
-## Overview
-- [Overview](overview.md) — living synthesis
-
-## Sources
-- [Source Title](sources/slug.md) — one-line summary
-
-## Entities
-- [Entity Name](entities/EntityName.md) — one-line description
-
-## Concepts
-- [Concept Name](concepts/ConceptName.md) — one-line description
-
-## Syntheses
-- [Analysis Title](syntheses/slug.md) — what question it answers
-```
-
-## Log Format
-
-`## [YYYY-MM-DD] <operation> | <title>`
-
-Operations: `ingest`, `query`, `health`, `lint`, `graph`, `report`
+Log: `## [YYYY-MM-DD] <operation> | <title>`. Operations: `ingest`, `query`, `health`, `lint`, `graph`, `report`.
 
 > 日期使用操作执行日期（当前实际日期），而非源文档的原始发布日期。
 
 ---
-
-## Graph Health Report
-
-Triggered by: *"graph report"* or `python tools/build_graph.py --report`
-
-The `--report` flag generates a structured graph health report covering:
-- **Health summary** — edges/node ratio, orphan %, community count, link density
-- **Orphan nodes** — pages with zero graph connections
-- **God nodes** — hub pages with degree > μ+2σ (disproportionate connectivity)
-- **Fragile bridges** — community pairs connected by only 1 edge
-- **Phantom hubs** — `[[wikilinks]]` referenced by 2+ existing pages but pointing to non-existent pages (page creation signals)
-
-Use `--save` to write the report to `graph/graph-report.md`.
-
----
-
-## Phase 3 Design Constraints (Auto-Linking — Open)
-
-Phase 3 proposes automatic `[[wikilink]]` insertion based on graph analysis. The following hard rules apply:
-
-### Promotion Gate: `draft → stable`
-- Auto-linked edges start as `DRAFT` (visible in graph, not written to page body)
-- A dedicated `promote` pass validates source grounding + consistency
-- Only edges that pass get materialized as `[[wikilinks]]` in the page
-- **Link density budget**: a page must have ≥2 outbound wikilinks before promotion
-
-### Hard Rules
-| ID | Rule | Rationale |
-|---|---|---|
-| HG-WA-01 | Graph layer MUST NOT auto-create pages from broken links — report only | LLM ingest produces hallucinated wikilinks; auto-creating amplifies noise |
-| HG-WA-02 | New slash commands MUST NOT duplicate existing command coverage | Prevents user confusion; merge into existing commands instead |
 
 ## Reply Style
 Respond in Chinese with minimal, technical text. No pleasantries, no openings, no summaries. Use newlines and short paragraphs for clarity. This rule applies to text responses only; code, comments, and commit messages remain as usual.

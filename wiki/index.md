@@ -11,4 +11,10 @@ This file is maintained by the LLM. Updated on every ingest.
 
 ## Concepts
 
+## Issues
+- [issues](issues.md) — pending entities, phantom links, contradictions
+
+## References
+- [interests](interests.md) — user interests for filter matching
+
 ## Syntheses

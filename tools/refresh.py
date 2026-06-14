@@ -14,25 +14,18 @@ Re-ingests changed documents to update wiki/sources/ pages with accurate facts.
 import os
 import sys
 import json
-import hashlib
 import re
 from typing import Optional
 from pathlib import Path
 from datetime import date
+
+from _utils import read_file, sha256
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
 RAW_DIR = REPO_ROOT / "raw"
 SOURCES_DIR = WIKI_DIR / "sources"
 REFRESH_CACHE = REPO_ROOT / "graph" / ".refresh_cache.json"
-
-
-def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
-
-
-def read_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
 def load_refresh_cache() -> dict:

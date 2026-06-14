@@ -27,16 +27,14 @@ from datetime import date
 
 import os
 
+from _utils import read_file, extract_wikilinks
+
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
 GRAPH_DIR = REPO_ROOT / "graph"
 GRAPH_JSON = GRAPH_DIR / "graph.json"
 LOG_FILE = WIKI_DIR / "log.md"
 SCHEMA_FILE = REPO_ROOT / "CLAUDE.md"
-
-
-def read_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
 def call_llm(prompt: str, model_env: str, default_model: str, max_tokens: int = 4096) -> str:
@@ -58,10 +56,6 @@ def call_llm(prompt: str, model_env: str, default_model: str, max_tokens: int = 
 def all_wiki_pages() -> list[Path]:
     return [p for p in WIKI_DIR.rglob("*.md")
             if p.name not in ("index.md", "log.md", "lint-report.md")]
-
-
-def extract_wikilinks(content: str) -> list[str]:
-    return re.findall(r'\[\[([^\]]+)\]\]', content)
 
 
 def page_name_to_path(name: str) -> list[Path]:

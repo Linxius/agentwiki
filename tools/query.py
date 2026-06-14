@@ -18,18 +18,15 @@ import json
 import argparse
 from pathlib import Path
 from datetime import date
-
 import os
+
+from _utils import read_file, write_file, call_llm
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
 INDEX_FILE = WIKI_DIR / "index.md"
 LOG_FILE = WIKI_DIR / "log.md"
 SCHEMA_FILE = REPO_ROOT / "CLAUDE.md"
-
-
-def read_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
 def write_file(path: Path, content: str):

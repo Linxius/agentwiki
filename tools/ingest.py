@@ -27,13 +27,18 @@ The LLM reads the source, extracts knowledge, and updates the wiki:
 import os
 import sys
 import json
-import hashlib
-import re
 import shutil
 import tempfile
 from pathlib import Path
 from collections import defaultdict
 from datetime import date
+
+from _utils import read_file, write_file, call_llm, sha256, parse_json_from_response
+from _utils import inject_source_url, extract_wikilinks, all_wiki_pages
+
+from _utils import (read_file, write_file, call_llm, sha256,
+                    parse_json_from_response, inject_source_url,
+                    extract_wikilinks, all_wiki_pages)
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
@@ -51,12 +56,8 @@ CONVERTIBLE_EXTENSIONS = {
     ".wav", ".mp3",  # audio transcription via markitdown
 }
 ALL_SUPPORTED_EXTENSIONS = {".md"} | CONVERTIBLE_EXTENSIONS
-SCHEMA_FILE = REPO_ROOT / "CLAUDE.md"
+SCHEMA_FILE = REPO_ROOT / "AGENTS.md"
 INTERESTS_FILE = REPO_ROOT / "wiki" / "interests.md"
-
-
-def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def read_file(path: Path) -> str:
@@ -95,61 +96,6 @@ def extract_url_from_file(source: Path, source_content: str) -> str | None:
     return None
 
 
-def inject_source_url(file_path: Path, source_url: str):
-    """Inject source_url into file's YAML frontmatter as url: field.
-
-    If file already has YAML frontmatter, add/update url: field.
-    If no frontmatter, prepend one with url: field.
-    """
-    if not source_url or source_url == file_path.as_posix():
-        return
-
-    content = read_file(file_path)
-    fmatch = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
-
-    if fmatch:
-        frontmatter = fmatch.group(1)
-        rest = content[fmatch.end():]
-
-        if re.search(r'^url:\s*', frontmatter, re.MULTILINE):
-            frontmatter = re.sub(
-                r'^url:\s*.*$',
-                f'url: {source_url}',
-                frontmatter,
-                flags=re.MULTILINE,
-            )
-        else:
-            first_nl = frontmatter.index('\n') + 1 if '\n' in frontmatter else len(frontmatter)
-            frontmatter = frontmatter[:first_nl] + f'url: {source_url}\n' + frontmatter[first_nl:]
-
-        new_content = f'---\n{frontmatter}\n---\n{rest}'
-    else:
-        new_content = f'---\nurl: {source_url}\n---\n{content}'
-
-    file_path.write_text(new_content, encoding='utf-8')
-
-
-def call_llm(prompt: str, max_tokens: int = 8192) -> str:
-    try:
-        from litellm import completion
-    except ImportError:
-        print("Error: litellm not installed. Run: pip install litellm")
-        sys.exit(1)
-        
-    model = os.getenv("LLM_MODEL", "claude-3-5-sonnet-latest")
-    
-    kwargs = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    
-    if max_tokens:
-        kwargs["max_tokens"] = max_tokens
-
-    response = completion(**kwargs)
-    return response.choices[0].message.content
-
-
 def write_file(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -169,17 +115,6 @@ def build_wiki_context() -> str:
         for p in recent:
             parts.append(f"## {p.relative_to(REPO_ROOT)}\n{p.read_text()}")
     return "\n\n---\n\n".join(parts)
-
-
-def parse_json_from_response(text: str) -> dict:
-    # Strip markdown code fences if present
-    text = re.sub(r"^```(?:json)?\s*", "", text.strip())
-    text = re.sub(r"\s*```$", "", text.strip())
-    # Find the outermost JSON object
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        raise ValueError("No JSON object found in response")
-    return json.loads(match.group())
 
 
 def parse_interests(content: str) -> list[dict]:
@@ -352,30 +287,30 @@ def update_index(new_entry: str, section: str = "Sources"):
     if not content:
         content = "# Wiki Index\n\n## Overview\n- [Overview](overview.md) — living synthesis\n\n## Sources\n\n## Entities\n\n## Concepts\n\n## Syntheses\n"
     section_header = f"## {section}"
-    if section_header in content:
-        content = content.replace(section_header + "\n", section_header + "\n" + new_entry + "\n")
-    else:
+
+    lines = content.split("\n")
+    header_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == section_header:
+            header_idx = i
+            break
+
+    if header_idx is None:
         content += f"\n{section_header}\n{new_entry}\n"
+    else:
+        # Find insertion point: skip blank lines after header
+        insert_at = header_idx + 1
+        while insert_at < len(lines) and lines[insert_at].strip() == "":
+            insert_at += 1
+        lines.insert(insert_at, new_entry)
+        content = "\n".join(lines)
+
     write_file(INDEX_FILE, content)
 
 
 def append_log(entry: str):
     existing = read_file(LOG_FILE)
     write_file(LOG_FILE, entry.strip() + "\n\n" + existing)
-
-
-def extract_wikilinks(content: str) -> list[str]:
-    """Extract all [[WikiLink]] targets from page content."""
-    return re.findall(r'\[\[([^\]]+)\]\]', content)
-
-
-def all_wiki_pages() -> set[str]:
-    """Return set of all wiki page stems (case-insensitive)."""
-    pages = set()
-    for p in WIKI_DIR.rglob("*.md"):
-        if p.name not in ("index.md", "log.md", "lint-report.md"):
-            pages.add(p.stem.lower())
-    return pages
 
 
 def validate_ingest(changed_pages: list[str] | None = None) -> dict:

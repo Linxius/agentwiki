@@ -33,11 +33,13 @@ from collections import defaultdict
 
 import os
 
+from _utils import read_file, write_file, call_llm, inject_source_url
+
 REPO_ROOT = Path(__file__).parent.parent
 INBOX_DIR = REPO_ROOT / "raw" / "inbox"
-DAILY_DIR = REPO_ROOT / "raw" / "digest"
-BRIEF_DIR = DAILY_DIR / "brief"
-BRIEF_FILE = DAILY_DIR / "brief.md"
+DIGEST_DIR = REPO_ROOT / "raw" / "digest"
+BRIEF_DIR = DIGEST_DIR / "brief"
+BRIEF_FILE = DIGEST_DIR / "brief.md"
 CATEGORIES = [
     "articles", "datasets", "docs", "books",
     "papers", "projects", "talks",
@@ -45,36 +47,6 @@ CATEGORIES = [
 INTERESTS_FILE = REPO_ROOT / "wiki" / "interests.md"
 LOG_FILE = REPO_ROOT / "wiki" / "log.md"
 SCHEMA_FILE = REPO_ROOT / "AGENTS.md"
-
-
-def read_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
-
-
-def write_file(path: Path, content: str):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
-def call_llm(prompt: str, max_tokens: int = 8192) -> str:
-    try:
-        from litellm import completion
-    except ImportError:
-        print("Error: litellm not installed. Run: pip install litellm")
-        sys.exit(1)
-
-    model = os.getenv("LLM_MODEL", "claude-3-5-sonnet-latest")
-
-    kwargs = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-
-    if max_tokens:
-        kwargs["max_tokens"] = max_tokens
-
-    response = completion(**kwargs)
-    return response.choices[0].message.content
 
 
 def parse_interests(content: str) -> list[dict]:
@@ -372,44 +344,9 @@ def generate_new_brief():
     write_file(BRIEF_FILE, content)
 
 
-def inject_source_url(file_path: Path, source_url: str):
-    """Inject source_url into file's YAML frontmatter as url: field.
-
-    If file already has YAML frontmatter, add/update url: field.
-    If no frontmatter, prepend one with url: field.
-    Skips if source_url is empty or is just the file path itself.
-    """
-    if not source_url or source_url == file_path.as_posix():
-        return
-
-    content = read_file(file_path)
-    fmatch = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
-
-    if fmatch:
-        frontmatter = fmatch.group(1)
-        rest = content[fmatch.end():]
-
-        if re.search(r'^url:\s*', frontmatter, re.MULTILINE):
-            frontmatter = re.sub(
-                r'^url:\s*.*$',
-                f'url: {source_url}',
-                frontmatter,
-                flags=re.MULTILINE,
-            )
-        else:
-            first_nl = frontmatter.index('\n') + 1 if '\n' in frontmatter else len(frontmatter)
-            frontmatter = frontmatter[:first_nl] + f'url: {source_url}\n' + frontmatter[first_nl:]
-
-        new_content = f'---\n{frontmatter}\n---\n{rest}'
-    else:
-        new_content = f'---\nurl: {source_url}\n---\n{content}'
-
-    file_path.write_text(new_content, encoding='utf-8')
-
-
 def move_file_to_daily(file_path: Path, date_str: str):
     """Move file to digest/YYYY-MM-DD/sources/."""
-    dest_dir = DAILY_DIR / date_str / "sources"
+    dest_dir = DIGEST_DIR / date_str / "sources"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / file_path.name
 
@@ -444,7 +381,7 @@ def append_log(entry: str):
 def run_filter(dry_run: bool = False, json_output: bool = False):
     """Main filter flow."""
     # Ensure directories exist
-    DAILY_DIR.mkdir(parents=True, exist_ok=True)
+    DIGEST_DIR.mkdir(parents=True, exist_ok=True)
     BRIEF_DIR.mkdir(parents=True, exist_ok=True)
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
 

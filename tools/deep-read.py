@@ -25,42 +25,13 @@ import argparse
 from pathlib import Path
 from datetime import date
 from collections import defaultdict
-
 import os
+
+from _utils import read_file, write_file, call_llm
 
 REPO_ROOT = Path(__file__).parent.parent
 DAILY_DIR = REPO_ROOT / "raw" / "digest"
 BRIEF_FILE = DAILY_DIR / "brief.md"
-
-
-def read_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
-
-
-def write_file(path: Path, content: str):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
-def call_llm(prompt: str, max_tokens: int = 8192) -> str:
-    try:
-        from litellm import completion
-    except ImportError:
-        print("Error: litellm not installed. Run: pip install litellm")
-        sys.exit(1)
-
-    model = os.getenv("LLM_MODEL", "claude-3-5-sonnet-latest")
-
-    kwargs = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-
-    if max_tokens:
-        kwargs["max_tokens"] = max_tokens
-
-    response = completion(**kwargs)
-    return response.choices[0].message.content
 
 
 def find_checked_entries(brief_content: str, date_str: str = None) -> list[dict]:
