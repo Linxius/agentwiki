@@ -291,9 +291,6 @@ def main():
     # ── Check if already converted ──
     if output.exists():
         print(f"\nAlready converted: {output.relative_to(REPO_ROOT)}")
-        print(f"Done. Now ingest with:")
-        print(f"  python tools/ingest.py {output.relative_to(REPO_ROOT)}")
-        print(f"  — or in your agent: ingest {output.relative_to(REPO_ROOT)}")
         return
 
     print(f"  Backend: {backend}")
@@ -310,13 +307,9 @@ def main():
         if not pdf_path.exists():
             print(f"Error: file not found: {args.input}")
             sys.exit(1)
-        result = BACKENDS[backend](pdf_path, output)
-        if result:
-            print(f"  — or in your agent: ingest {result.relative_to(REPO_ROOT)}")
+        BACKENDS[backend](pdf_path, output)
 
-    print(f"\nDone. Now ingest with:")
-    print(f"  python tools/ingest.py {output.relative_to(REPO_ROOT)}")
-    print(f"  — or in your agent: ingest {output.relative_to(REPO_ROOT)}")
+    print(f"\nDone: {output.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":

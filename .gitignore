@@ -16,18 +16,10 @@ Thumbs.db
 *.swo
 *~
 
-# === 运行时状态 ===
-raw/.feeds-state.json
-
 # === 旧路径（已废弃） ===
 raw/daily/
 
 # === 自动生成的 wiki 内容 ===
-wiki/sources/
-wiki/entities/
-wiki/concepts/
-wiki/syntheses/
-wiki/images/
 wiki/lint-report.md
 wiki/health-report.md
 wiki/archived/
@@ -37,17 +29,17 @@ graph/graph.json
 graph/graph.html
 graph/graph-report.md
 
-# === 自动生成的简报/源文件 ===
-raw/digest/brief/
-raw/digest/deepdive/
+# === raw/ 下不跟踪的内容 ===
+raw/inbox/
+raw/papers/
+raw/articles/
+raw/books/
+raw/projects/
+raw/talks/
+raw/docs/
+raw/datasets/
 raw/digest/sources/
-
-# === 下载的二进制文件（已转为 .md）===
-raw/**/*.pdf
-raw/**/*.pptx
-raw/**/*.docx
-raw/**/*.xlsx
-raw/**/*.html
+raw/digest/*/sources/
 
 # === 本地配置 ===
 config.local.json
