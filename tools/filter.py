@@ -12,7 +12,7 @@ Flow:
     3. Use LLM to generate brief summary (3-5 sentences) + detailed report (500-800 words)
     4. Match against interests (interested / possibly interested / not interested)
     5. Generate raw/digest/brief.md with entries sorted by match level
-    6. Move files to raw/digest/YYYY-MM-DD/sources/
+    6. Move files to raw/digest/sources/YYYY-MM-DD/
     7. Archive old brief.md entries
     8. Clear inbox/
 
@@ -303,7 +303,7 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
                 lines.append(f"#### {entries_title}")
                 lines.append(f"- 来源: {item['source_url']}")
                 if date_str:
-                    src_path = f"raw/digest/{date_str}/sources/{fname}"
+                    src_path = f"raw/digest/sources/{date_str}/{fname}"
                     lines.append(f"- 源文件: {src_path}")
                 if item.get('title_cn'):
                     lines.append(f"- 标题: {item['title_cn']}")
@@ -316,6 +316,7 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
                 lines.append(f"- 理由: {item['reason']}")
                 lines.append(f"- [ ] 深度阅读")
                 lines.append(f"- [ ] 合入 wiki")
+                lines.append(f"- [ ] 不感兴趣")
                 lines.append("")
                 lines.append(f"**简介**：{item['brief']}")
                 lines.append("")
@@ -356,6 +357,7 @@ def generate_new_brief():
 
 - 勾选「深度阅读」后，告诉 agent 生成详细解读
 - 勾选「合入 wiki」后，告诉 agent 执行合入
+- 勾选「不感兴趣」后，运行 deep-read 自动生成兴趣列表更新建议
 
 ## 状态说明
 
@@ -369,8 +371,8 @@ def generate_new_brief():
 
 
 def move_source(file_path: Path, date_str: str):
-    """Move .md file + its images/ dir to digest/YYYY-MM-DD/sources/."""
-    dest_dir = DIGEST_DIR / date_str / "sources"
+    """Move .md file + its images/ dir to digest/sources/YYYY-MM-DD/."""
+    dest_dir = DIGEST_DIR / "sources" / date_str
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_md = dest_dir / file_path.name
 
@@ -523,6 +525,50 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
 
     failed_files: set[str] = set()  # track failed rel paths
 
+    # ── Pre-filter: skip files matching exclusion list (no LLM call) ──
+    skipped_disinterest = 0
+    if disinterests:
+        disinterest_keywords_pre = set()
+        for d in disinterests:
+            disinterest_keywords_pre.update(k.lower() for k in d.get("keywords", []))
+        if disinterest_keywords_pre:
+            filtered_pending = []
+            for fp, rel in pending:
+                # Check filename first (cheap)
+                target = fp.stem.lower().replace('-', ' ').replace('_', ' ')
+                # Also check content head (first 500 chars)
+                try:
+                    head = read_file(fp)[:500].lower()
+                    target += " " + head
+                except Exception:
+                    pass
+                if any(kw in target for kw in disinterest_keywords_pre):
+                    # Skip LLM entirely: create minimal result
+                    serialized = [{
+                        "file": rel,
+                        "item_id": 1,
+                        "match_level": "not_interested",
+                        "matched_interests": [],
+                        "reason": "匹配排除列表，跳过 LLM 分析。",
+                        "suggested_category": "papers",
+                        "title": fp.stem,
+                        "title_cn": "",
+                        "brief": "匹配排除列表，跳过。",
+                        "detailed_report": "",
+                        "source_url": extract_source_url(fp),
+                        "domain": "",
+                        "keywords": [],
+                        "suggested_new_interests": [],
+                        "suggested_new_disinterests": [],
+                    }]
+                    cache[rel] = serialized
+                    save_filter_cache(cache)
+                    skipped_disinterest += 1
+                    print(f"  ⏭️  {fp.name} (排除列表命中, 跳过 LLM)")
+                else:
+                    filtered_pending.append((fp, rel))
+            pending = filtered_pending
+
     if pending:
         print(f"\n需分析 {len(pending)} 个文件（并行 max_workers=2）:\n")
 
@@ -555,12 +601,14 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     results = rebuild_results_from_cache(cache)
 
     # Post-process: apply disinterest exclusion rules
-    disinterested_count = 0
+    disinterested_count = skipped_disinterest
     disinterest_keywords = set()
     for d in disinterests:
         disinterest_keywords.update(k.lower() for k in d.get("keywords", []))
     if disinterest_keywords:
         for r in results:
+            if r["match_level"] == "not_interested":
+                continue  # already caught by pre-filter
             target_text = " ".join([
                 r.get("title", ""),
                 r.get("title_cn", ""),
@@ -603,21 +651,40 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     priority = {"interested": 0, "possibly_interested": 1, "not_interested": 2}
     results.sort(key=lambda x: priority.get(x["match_level"], 3))
 
-    # Generate brief.md (only successful entries)
+    # Generate new entries markdown
     today = date.today().isoformat()
-    brief_content = generate_brief_entries(results, today)
+    new_entries = generate_brief_entries(results, today)
 
     if not dry_run:
-        if BRIEF_FILE.exists():
-            print("  正在归档旧 brief...")
-            archive_current_brief()
-            generate_new_brief()
-
-        write_file(BRIEF_FILE, brief_content)
+        if BRIEF_FILE.exists() and BRIEF_FILE.stat().st_size > 50:
+            existing = read_file(BRIEF_FILE)
+            # Extract existing source_urls for dedup
+            existing_urls = set(re.findall(r'^\- 来源: (.+)$', existing, re.MULTILINE))
+            # Split new entries into individual items (by #### header)
+            items = re.split(r'(?=^#### )', new_entries, flags=re.MULTILINE)
+            to_append = []
+            for item in items:
+                m = re.search(r'^\- 来源: (.+)$', item, re.MULTILINE)
+                if m and m.group(1) not in existing_urls:
+                    to_append.append(item)
+            if to_append:
+                # Update date in header
+                updated = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
+                merged = updated.rstrip() + "\n\n" + "\n".join(to_append) + "\n"
+                write_file(BRIEF_FILE, merged)
+                print(f"  追加 {len(to_append)} 条新条目到 brief.md")
+            else:
+                print("  无新条目（全部已存在）")
+                # Still update date if needed
+                existing = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
+                if existing != read_file(BRIEF_FILE):
+                    write_file(BRIEF_FILE, existing)
+        else:
+            write_file(BRIEF_FILE, new_entries)
 
         for item in results:
             if item["file"].exists():
-                print(f"  移动: {item['file'].name} → {today}/sources/")
+                print(f"  移动: {item['file'].name} → sources/{today}/")
                 try:
                     source_dest = move_source(item["file"], today)
                     print(f"    ✅ {source_dest}")
