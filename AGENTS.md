@@ -43,11 +43,12 @@ Describe what you want in plain English or use shorthand triggers:
 
 ### Agent Proactive Reminders
 
-The agent should proactively detect and remind about:
-- **inbox.md has links**: "inbox.md 中有 N 个链接待处理"
-- **New files in inbox/**: "今日有 N 份文件待筛选"
-- **Pending deep-read**: brief.md 有 `[x] 深度阅读` 但未生成报告
-- **Pending ingest**: brief.md 有 `[x] 合入 wiki` 但未处理
+The agent should proactively detect and remind with trigger words:
+- **inbox.md has links**: "inbox.md 中有 N 个链接待处理（触发词: inbox）"
+- **inbox/ has files**: "今日有 N 份文件待筛选（触发词: filter）"
+- **Pending deep-read**: "brief.md 有 `[x] 深度阅读` 但未生成报告（触发词: deep read）"
+- **Pending ingest**: "brief.md 有 `[x] 合入 wiki` 但未处理（触发词: ingest from digest）"
+- **Feeds stale**: "feeds 已 N 天未拉取（触发词: feeds）"
 - **After filter completes**: "筛选完成！请阅读 brief.md 确认"
 
 ### Status Auto-Detect
