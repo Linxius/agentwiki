@@ -397,7 +397,7 @@ def clear_inbox(skip_rel_paths: set[str] | None = None):
         # Ensure inbox.md exists even if dir is empty
         inbox_md = INBOX_DIR / "inbox.md"
         if not inbox_md.exists():
-            inbox_md.write_text("# Inbox\n", encoding="utf-8")
+            inbox_md.write_text("# Inbox\n\n- \n", encoding="utf-8")
         print("  inbox/ 已为空。")
         return
 
@@ -409,7 +409,7 @@ def clear_inbox(skip_rel_paths: set[str] | None = None):
     count = 0
     for f in inbox_files:
         if f.name == "inbox.md":
-            f.write_text("# Inbox\n", encoding="utf-8")
+            f.write_text("# Inbox\n\n- \n", encoding="utf-8")
             print("  📝 清空 inbox.md 内容")
             continue
         if f.name in skipped:
@@ -425,8 +425,8 @@ def clear_inbox(skip_rel_paths: set[str] | None = None):
 
     # Ensure inbox.md exists
     inbox_md_path = INBOX_DIR / "inbox.md"
-    if not inbox_md_path.exists() or inbox_md_path.read_text(encoding="utf-8").strip() != "# Inbox":
-        inbox_md_path.write_text("# Inbox\n", encoding="utf-8")
+    if not inbox_md_path.exists() or not inbox_md_path.read_text(encoding="utf-8").strip():
+        inbox_md_path.write_text("# Inbox\n\n- \n", encoding="utf-8")
 
 
 def append_log(entry: str):
