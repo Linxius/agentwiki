@@ -39,6 +39,7 @@ raw/projects/
 raw/talks/
 raw/docs/
 raw/datasets/
+raw/codes/
 raw/digest/sources/
 raw/digest/*/sources/
 raw/digest/brief.md
@@ -47,5 +48,6 @@ raw/digest/brief/*.md
 # === 本地配置 ===
 config.local.json
 .vscode/
+.mimocode/
 .obsidian/
 raw/.filter-failed.txt

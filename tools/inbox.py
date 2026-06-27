@@ -13,6 +13,10 @@ Supported links in inbox.md:
     - https://arxiv.org/abs/2401.12345       arXiv paper
     - https://example.com/article            web page
     - 2401.12345                              arXiv ID
+    - https://github.com/user/repo.git       git repo → clone + code-read
+    - git@github.com:user/repo.git           git repo (SSH) → clone + code-read
+    - D:/Code/some-project                   local path → code-read
+    - /home/user/project                     local path (unix) → code-read
 
 Supported local files in inbox/:
     .pdf     → pdf2md.py (mineru/arxiv2md backend)
@@ -44,6 +48,15 @@ ARXIV_PATTERNS = [
     re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?$"),
 ]
 
+GIT_URL_PATTERN = re.compile(
+    r"^(https?://.*\.git"
+    r"|git@[\w.-]+:.*\.git"
+    r"|https?://github\.com/[\w.-]+/[\w.-]+"
+    r"|https?://gitlab\.com/[\w.-]+/[\w.-]+"
+    r"|https?://bitbucket\.org/[\w.-]+/[\w.-]+"
+    r"|git@[\w.-]+:[\w.-]+/[\w.-]+)"
+)
+
 
 # ─── Inbox.md parsing ───────────────────────────────────────────────
 
@@ -63,18 +76,36 @@ def read_inbox_md() -> list[dict]:
         # URL pattern
         url_match = re.match(r'^\s*[-*]\s*(https?://\S+)', line)
         if url_match:
-            url = url_match.group(1).rstrip('`).')
+            url = url_match.group(1).rstrip('`).,')
             arxiv_id = extract_arxiv_id(url)
             if arxiv_id:
                 items.append({"link": url, "type": "arxiv", "raw": line})
+            elif is_git_url(url):
+                items.append({"link": url, "type": "git", "raw": line})
             elif is_url(url):
                 items.append({"link": url, "type": "url", "raw": line})
             continue
+
+        # git SSH pattern
+        git_match = re.match(r'^\s*[-*]\s*(git@[\w.-]+:\S+)', line)
+        if git_match:
+            url = git_match.group(1).rstrip('`).,')
+            if is_git_url(url):
+                items.append({"link": url, "type": "git", "raw": line})
+                continue
 
         # arXiv ID pattern
         arx = extract_arxiv_id(line)
         if arx:
             items.append({"link": line, "type": "arxiv", "raw": line})
+            continue
+
+        # local path pattern
+        path_match = re.match(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+', line)
+        if path_match:
+            raw_path = line.lstrip("-* ").strip()
+            if is_local_path(raw_path):
+                items.append({"link": raw_path, "type": "local", "raw": line})
 
     return items
 
@@ -91,6 +122,22 @@ def extract_arxiv_id(text: str) -> str | None:
 def is_url(text: str) -> bool:
     """Check if text looks like a URL (not arXiv)."""
     return text.startswith("http://") or text.startswith("https://")
+
+
+def is_git_url(text: str) -> bool:
+    return bool(GIT_URL_PATTERN.match(text.strip()))
+
+
+def is_local_path(text: str) -> bool:
+    p = Path(text.strip())
+    return p.exists() and (p.is_file() or p.is_dir())
+
+
+def process_code(item: dict, out_dir: Path) -> str | None:
+    """Log a git/local item for agent subagent handling (no direct LLM call)."""
+    link = item["link"]
+    print(f"  [code] {link} — 待子代理处理")
+    return None
 
 
 # ─── Web page fetching ──────────────────────────────────────────────
@@ -393,7 +440,9 @@ def process_link(item: dict, out_dir: Path) -> str:
 
     slug = generate_slug(link)
 
-    if item_type == "arxiv":
+    if item_type in ("git", "local"):
+        return process_code(item, out_dir)
+    elif item_type == "arxiv":
         print(f"  [arXiv] {link}")
         content = fetch_arxiv(link)
         suffix = ".md"
@@ -429,7 +478,9 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
         if not process_only:
             content = INBOX_MD.read_text(encoding="utf-8")
             content = re.sub(r'^\s*[-*]\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE)
+            content = re.sub(r'^\s*[-*]\s*git@[\w.-]+:\S+\s*\n?', '', content, flags=re.MULTILINE)
             content = re.sub(r'^\s*[-*]\s*\d{4}\.\d{4,5}[^\n]*\n?', '', content, flags=re.MULTILINE)
+            content = re.sub(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+\s*\n?', '', content, flags=re.MULTILINE)
             content = re.sub(r'\n{3,}', '\n\n', content)
             INBOX_MD.write_text(content, encoding="utf-8")
             print("-" * 40)
@@ -458,8 +509,10 @@ def main():
 
     if args.list:
         items = read_inbox_md()
+        type_labels = {"arxiv": "arXiv", "url": "web", "git": "git", "local": "local"}
         for i, item in enumerate(items, 1):
-            print(f"{i}. [{item['type']}] {item['link']}")
+            label = type_labels.get(item["type"], item["type"])
+            print(f"{i}. [{label}] {item['link']}")
         return
 
     if args.list_local:
