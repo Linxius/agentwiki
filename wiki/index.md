@@ -7,6 +7,8 @@ This file is maintained by the LLM. Updated on every ingest.
 
 ## Sources
 
+- [AMD FidelityFX Super Resolution (FSR 1.0)](sources/fidelityfx-fsr-1.md) — 代码分析
+- [Snapdragon Game Super Resolution (SGSR)](sources/snapdragon-gsr.md) — 代码分析
 ## Entities
 
 ## Concepts

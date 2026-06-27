@@ -199,16 +199,34 @@ actor({
 - slug: kebab-case 文件名
 - language: 主要编程语言
 - summary: 2-4 句概述
-- framework_overview: 架构描述（300-500字）
+- framework_overview: 架构描述（300-500字），必须包含：
+  - 设计意图表：解释每个关键设计决策的原因（如"为什么分离 pass"、"为什么用这种色彩空间"）
+  - 源文件映射表：列出每个源文件的功能和所属模块
+  - 数据流图：Mermaid graph LR 展示模块间的数据传递（含纹理格式）
 - algorithm_flow: 核心算法流程（300-500字）
 - step_breakdown: 步骤数组（step, name, input, process, output）
 - io_analysis: 输入输出分析（200-400字）
-- mermaid_architecture: Mermaid graph TD 架构图
-- mermaid_flowchart: Mermaid flowchart LR 流程图
-- mermaid_callgraph: Mermaid graph LR 调用图
+- mermaid_architecture: Mermaid graph TD 架构图，要求：
+  - 每个节点标注设计意图（如 `style` 高亮关键决策点）
+  - 分支节点用 `{}` 表示条件选择
+  - 注释说明每个模块的职责
+  - 使用 stroke 边框高亮（不用 fill 填充，兼容深色主题）：`stroke:#888,stroke-width:2px`
+- mermaid_flowchart: Mermaid flowchart TD 详细流程图（纵向，避免长横条），要求：
+  - 使用 subgraph 分组相关步骤
+  - 标注输入/输出数据格式
+  - 关键步骤用 stroke 高亮（同上）
+- mermaid_callgraph: Mermaid graph TD 调用图，要求：
+  - 按模块分组（如 V1/V2，EASU/RCAS）
+  - 标注函数的职责
+  - 使用 stroke 区分模块
+- flowchart_details: 每个 Mermaid 流程图后的详细说明（必须包含），要求：
+  - 对每个模块/步骤说明：输入、处理、输出
+  - 具体功能描述
+  - 具体流程算法（如公式、计算步骤）
+  - 使用中文撰写
 - dependencies: 外部依赖数组
 - key_data_structures: 数据结构描述（100-300字）
-- design_patterns: 设计模式描述（100-200字）
+- design_patterns: 设计模式描述（100-200字），必须解释每个模式的**优势**和**适用场景**
 - source_path: 源码路径
 - source_url: 仓库地址（可选）
 

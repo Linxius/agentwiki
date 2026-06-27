@@ -16,6 +16,7 @@ Usage:
 """
 
 import sys
+import os
 import re
 import json
 import subprocess
@@ -56,6 +57,18 @@ GIT_URL_PATTERN = re.compile(
 
 def is_git_url(text: str) -> bool:
     return bool(GIT_URL_PATTERN.match(text.strip()))
+
+
+def normalize_path(p: str) -> Path:
+    """Normalize MSYS/Git Bash /d/... paths to D:/... on Windows."""
+    path = Path(p).resolve()
+    if path.exists():
+        return path
+    if os.name == "nt" and re.match(r"^/[a-zA-Z]/", p):
+        converted = Path(p[1] + ":" + p[2:])
+        if converted.exists():
+            return converted.resolve()
+    return path
 
 
 def repo_name_from_url(url: str) -> str:
@@ -140,7 +153,7 @@ def cmd_collect(args):
 
     tasks = []
     for p in locals_:
-        target = Path(p).resolve()
+        target = normalize_path(p)
         if target.exists():
             source_url = args.url if args.url else get_git_remote(target)
             tasks.append((target, source_url))
@@ -219,6 +232,8 @@ def build_wiki_page(data: dict, source_path: str, source_url: str = "") -> str:
     ]:
         content = data.get(key, "").strip()
         if content and ("graph" in content or "flowchart" in content):
+            if not content.startswith("```"):
+                content = f"```mermaid\n{content}\n```"
             mermaid_sections.append(f"### {label}\n\n{content}")
     mermaid_md = "\n\n".join(mermaid_sections) if mermaid_sections else "_（无流程图）_"
 

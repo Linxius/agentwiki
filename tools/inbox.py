@@ -104,8 +104,9 @@ def read_inbox_md() -> list[dict]:
         path_match = re.match(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+', line)
         if path_match:
             raw_path = line.lstrip("-* ").strip()
-            if is_local_path(raw_path):
-                items.append({"link": raw_path, "type": "local", "raw": line})
+            normalized = normalize_local_path(raw_path)
+            if normalized:
+                items.append({"link": str(normalized), "type": "local", "raw": line})
 
     return items
 
@@ -128,9 +129,21 @@ def is_git_url(text: str) -> bool:
     return bool(GIT_URL_PATTERN.match(text.strip()))
 
 
-def is_local_path(text: str) -> bool:
+def normalize_local_path(text: str) -> Path | None:
+    """Normalize a local path, converting MSYS/Git Bash /d/... to D:/... on Windows."""
     p = Path(text.strip())
-    return p.exists() and (p.is_file() or p.is_dir())
+    if p.exists() and (p.is_file() or p.is_dir()):
+        return p
+    # MSYS/Git Bash style: /d/Code/... -> D:/Code/...
+    if os.name == "nt" and re.match(r"^/[a-zA-Z]/", text):
+        converted = Path(text[1] + ":" + text[2:])
+        if converted.exists() and (converted.is_file() or converted.is_dir()):
+            return converted
+    return None
+
+
+def is_local_path(text: str) -> bool:
+    return normalize_local_path(text) is not None
 
 
 def process_code(item: dict, out_dir: Path) -> str | None:
@@ -470,8 +483,9 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
         for item in items:
             try:
                 saved_file = process_link(item, out_dir)
-                saved.append(str(saved_file.relative_to(REPO_ROOT)))
-                print(f"    -> {saved_file.relative_to(REPO_ROOT)}")
+                if saved_file is not None:
+                    saved.append(str(saved_file.relative_to(REPO_ROOT)))
+                    print(f"    -> {saved_file.relative_to(REPO_ROOT)}")
             except Exception as e:
                 print(f"    FAILED: {e}")
 

@@ -1,3 +1,7 @@
+## [2026-06-27] code-read | AMD FidelityFX Super Resolution (FSR 1.0)
+
+## [2026-06-27] code-read | Snapdragon Game Super Resolution (SGSR)
+
 ## [2026-06-15] filter | 2 files processed (1 excluded)
 
 ## [2026-06-15] filter | 86 files processed (40 excluded) (5 failed)
