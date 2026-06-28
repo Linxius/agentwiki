@@ -48,7 +48,7 @@ graph TD
     F -.->|下一帧输入| E
 ```
 
-#### 数据流图详细说明
+**数据流图详细说明**
 
 **模块 1: 低分辨率渲染**
 - 输入: 游戏引擎渲染的低分辨率场景
@@ -85,203 +85,7 @@ graph TD
 
 ---
 
-## 核心算法流程
-
-### V1 算法（单 Pass 空间上采样）
-```mermaid
-flowchart TD
-    A[采样当前像素] --> B[textureGather 3x3邻域]
-    B --> C{边缘强度 > 阈值?}
-    C -->|否| D[跳过锐化]
-    C -->|是| E[采集12个邻域像素]
-    E --> F[计算均值,零均值化]
-    F --> G[计算自适应std]
-    G --> H[fastLanczos2加权求和]
-    H --> I[clamp deltaY ±23/255]
-    I --> J[叠加到原始RGB]
-    D --> K[输出]
-    J --> K
-
-    style C stroke:#888,stroke-width:2px
-    style H stroke:#888,stroke-width:2px
-```
-
-#### V1 算法详细说明
-
-**步骤 1: 纹理采集**
-- 输入: 低分辨率渲染纹理、UV 坐标
-- 处理: 
-  1. 使用 textureGather 指令一次性获取 2x2 像素块的单通道数据（4 次调用获取 4 个通道）
-  2. 使用 SampleLevel 获取当前像素颜色
-  3. 共采集 4-16 个邻域像素
-- 输出: 邻域像素值数组
-
-**步骤 2: 边缘检测**
-- 输入: 邻域像素值
-- 处理: 
-  1. 计算水平方向像素差异总和：|p1-p0| + |p2-p1| + |p3-p2|
-  2. 计算垂直方向像素差异总和：|p5-p4| + |p6-p5| + |p7-p6|
-  3. 比较 edgeVote 与 EdgeThreshold 阈值
-- 输出: 布尔标志（是否执行锐化）
-
-**步骤 3: 局部统计**
-- 输入: 12 个邻域像素
-- 处理: 
-  1. 计算 12 个像素的均值：sum / 12
-  2. 零均值化：每个像素减去均值
-  3. 求绝对值总和：sum(abs(pixel - mean))
-  4. 计算自适应标准差：std = (sumMean)^2 / 12
-- 输出: 标准差 std、零均值邻域数据
-
-**步骤 4: Lanczos 加权**
-- 输入: 邻域像素位置偏移、颜色值、std
-- 处理: 
-  1. 使用 fastLanczos2(x) = (x-4)^2 * (x*(x-4)-(x-4)) 计算权重
-  2. 对 12 个采样点进行加权求和
-  3. 权重归一化确保总和为 1
-- 输出: 加权上采样颜色值
-
-**步骤 5: 锐化与裁剪**
-- 输入: 上采样值、局部 min/max
-- 处理: 
-  1. 计算锐化增量：deltaY = edgeSharpness * (finalY - originalY)
-  2. 钳制到局部范围：clamp(deltaY, minY - originalY, maxY - originalY)
-  3. 限制增量范围：clamp(deltaY, -23/255, 23/255)
-  4. 叠加到原始 RGB：output = original + deltaY
-- 输出: 锐化后的 RGB 颜色
-
----
-
-### V2 算法（时间性上采样）
-```mermaid
-flowchart TD
-    subgraph Convert Pass
-        A1[深度纹理] --> A2[3x3最近深度膨胀]
-        A2 --> A3[运动矢量解码]
-        A3 --> A4[clipToPrevClip重投影]
-        A4 --> A5[深度裁剪权重]
-        A6[RGB颜色] --> A7[色调映射]
-        A7 --> A8[RGB→YCoCg]
-        A8 --> A9[量化打包R32UI]
-    end
-
-    subgraph Upscale Pass
-        B1[运动重投影] --> B2[获取历史帧]
-        B2 --> B3[5-9点Lanczos上采样]
-        B3 --> B4[方差盒裁剪]
-        B4 --> B5[深度感知混合权重]
-        B5 --> B6[历史帧+当前帧混合]
-        B6 --> B7[YCoCg→RGB反转换]
-        B7 --> B8[曝光补偿]
-    end
-
-    A5 --> B5
-    A9 --> B3
-
-    style A5 stroke:#888,stroke-width:2px
-    style B4 stroke:#888,stroke-width:2px
-```
-
-#### V2 算法详细说明
-
-**Convert Pass - 步骤 1: 深度膨胀**
-- 输入: 深度纹理（D24S8）
-- 处理: 
-  1. 4 次 textureGather 获取 4x4 邻域的深度值
-  2. 计算每个 2x2 块中的最近深度
-  3. 填补深度边缘的空洞，避免后续采样出现深度跳变
-- 输出: 膨胀后的深度数据
-
-**Convert Pass - 步骤 2: 运动矢量解码**
-- 输入: 编码运动矢量纹理（RGBA）
-- 处理: 
-  1. 解码运动矢量：velocity = (encoded - 32767/65535) / 0.2495
-  2. 对静态物体（velocity = 0），使用 clipToPrevClip 矩阵重投影
-  3. 计算前一帧的裁剪空间坐标
-- 输出: 解码后的运动矢量
-
-**Convert Pass - 步骤 3: 深度裁剪权重**
-- 输入: 当前帧深度、历史帧深度
-- 处理: 
-  1. 比较当前帧与历史帧的深度差异
-  2. 计算深度裁剪权重：weight = 1.0 - abs(currentDepth - historyDepth)
-  3. 钳制权重范围：clamp(weight, 0.0, 1.0)
-- 输出: 深度裁剪权重（用于 Upscale Pass 的混合）
-
-**Convert Pass - 步骤 4: 色彩转换与打包**
-- 输入: RGB 颜色
-- 处理: 
-  1. 简单色调映射：color = color / (1.0 + color)
-  2. RGB→YCoCg 转换：
-     - Y = 0.25*R + 0.5*G + 0.25*B
-     - Co = R - B
-     - Cg = G - 0.5*R - 0.5*B
-  3. 量化：Y 11位，Co 11位，Cg 10位
-  4. 打包为 uint32：(Y << 22) | (Co << 11) | Cg
-- 输出: YCoCgColor（R32UI 纹理）
-
-**Upscale Pass - 步骤 1: 运动重投影**
-- 输入: 运动矢量、当前帧 UV
-- 处理: 
-  1. 使用运动矢量计算历史帧 UV：prevUV = currentUV + velocity
-  2. 钳制 UV 范围：clamp(prevUV, 0.0, 1.0)
-- 输出: 历史帧采样 UV
-
-**Upscale Pass - 步骤 2: 获取历史帧**
-- 输入: 历史帧缓存、重投影 UV
-- 处理: 
-  1. 使用 textureLod 采样历史帧
-  2. 使用 textureGather 获取历史帧的 2x2 邻域
-- 输出: 历史帧颜色值
-
-**Upscale Pass - 步骤 3: Lanczos 上采样**
-- 输入: 当前帧 YCoCg 纹理、采样点位置
-- 处理: 
-  1. 使用 texelFetch 获取 5-9 个采样点
-  2. 应用 FastLanczos 滤波器：
-     - weight = fastLanczos2(distance)
-     - result = sum(weight * color) / sum(weight)
-  3. 对 Y 通道使用更高精度
-- 输出: 上采样后的 YCoCg 颜色
-
-**Upscale Pass - 步骤 4: 方差盒裁剪**
-- 输入: 上采样结果、历史帧颜色
-- 处理: 
-  1. 计算局部均值：mean = (min + max) / 2
-  2. 计算局部方差：var = (max - min) / 2
-  3. 钳制历史帧颜色：clamp(history, mean - var, mean + var)
-  4. 限制颜色变化范围，抑制鬼影
-- 输出: 裁剪后的历史帧颜色
-
-**Upscale Pass - 步骤 5: 深度感知混合**
-- 输入: 当前帧颜色、历史帧颜色、深度裁剪权重
-- 处理: 
-  1. 计算混合权重：weight = depthClipWeight * motionWeight
-  2. 混合公式：result = lerp(current, history, weight)
-  3. 钳制权重范围：clamp(weight, minLerp, maxLerp)
-- 输出: 混合后的 YCoCg 颜色
-
-**Upscale Pass - 步骤 6: 色彩反转换**
-- 输入: 混合后的 YCoCg 颜色
-- 处理: 
-  1. 反量化：Y = Y_11bit / 2047, Co = Co_11bit / 2047, Cg = Cg_10bit / 1023
-  2. YCoCg→RGB 转换：
-     - R = Y + Co + Cg
-     - G = Y - Cg
-     - B = Y - Co + Cg
-  3. 反色调映射：color = color / (1.0 - color)
-- 输出: RGB 颜色
-
-**Upscale Pass - 步骤 7: 曝光补偿**
-- 输入: 上采样后的 RGB 颜色、曝光参数
-- 处理: 
-  1. 应用曝光：color = color * preExposure
-  2. 钳制输出范围：clamp(color, 0.0, 1.0)
-- 输出: 最终 SceneColorOutput
-
----
-
-## 流程图
+## 算法详解
 
 ### 整体架构图
 
@@ -313,189 +117,221 @@ graph TD
     style C7 stroke:#888,stroke-width:2px
 ```
 
-#### 整体架构详细说明
-
-**V1 分支 - 单 Pass 空间上采样**
-- 输入: 低分辨率 RGBA 纹理
-- 处理: 单次 textureGather 采集 → 边缘检测 → Lanczos 加权 → 锐化叠加
-- 输出: 上采样后的 RGBA 纹理
-- 优势: 低延迟、低内存占用，适合移动端/VR
-- 劣势: 无法利用时序信息，质量上限较低
-
-**V2 分支 - 多 Pass 时间性上采样**
-- 输入: 低分辨率颜色、深度、运动矢量纹理
-- 处理: Convert Pass（预处理）→ Upscale Pass（上采样+混合）
-- 输出: SceneColor + History 缓存
-- 优势: 利用时序信息，质量更高，支持运动补偿
-- 劣势: 需要额外中间纹理，延迟较高
-
-**Convert Pass 子模块**
-- 功能: 预处理深度、运动矢量、颜色数据
-- 关键操作: 深度膨胀、运动矢量解码、YCoCg 转换、量化打包
-- 输出格式: RGBA16F（中间纹理）+ R32UI（色彩纹理）
-
-**Upscale Pass 子模块**
-- 功能: 执行高质量上采样和历史帧融合
-- 关键操作: Lanczos 滤波、方差裁剪、深度感知混合
-- 输出: 最终上采样颜色 + 历史帧缓存
-
-**变体选择逻辑**
-- 2-pass-fs: Convert + Upscale（片段着色器），适合移动端
-- 2-pass-cs: Convert + Upscale（计算着色器），适合桌面端
-- 3-pass-cs: Convert + Activate + Upscale，支持透明物体和亮度历史
-
 ---
 
-### V1 单 Pass 流程详解
+### V1 算法（单 Pass 空间上采样）
 
 ```mermaid
 flowchart TD
-    subgraph 输入["输入"]
-        I1[低分辨率纹理]
-        I2[texelSize.xy]
-    end
+    A[采样当前像素] --> B[textureGather 获取2x2像素块]
+    B --> C[计算edgeVote边缘投票值]
+    C --> D{edgeVote > 阈值?}
+    D -->|否| E[跳过锐化]
+    D -->|是| F[采集12个邻域像素]
+    F --> G[计算均值,零均值化]
+    G --> H[计算自适应std]
+    H --> I[fastLanczos2加权求和]
+    I --> J[clamp deltaY ±23/255]
+    J --> K[叠加到原始RGB]
+    E --> L[输出]
+    K --> L
 
-    subgraph V1["V1 空间上采样"]
-        A1[textureGather 3x3] --> A2[edgeVote边缘检测]
-        A2 --> A3[12-tap采样]
-        A3 --> A4[计算自适应std]
-        A4 --> A5[fastLanczos2加权]
-        A5 --> A6[锐化clamp ±23/255]
-    end
-
-    subgraph 输出["输出"]
-        O1[上采样后RGBA]
-    end
-
-    I1 --> A1
-    I2 --> A1
-    A6 --> O1
+    style D stroke:#888,stroke-width:2px
+    style H stroke:#888,stroke-width:2px
 ```
 
-#### V1 流程详细说明
+#### 12-tap 采样模式
 
-**输入模块**
-- 低分辨率纹理: 渲染在低分辨率下的场景颜色，格式为 RGBA8 或 RGBA16F
-- texelSize.xy: 一个 texel 在 UV 空间的尺寸，用于计算邻域采样偏移
+V1 使用 3 次 textureGather 采集 12 个像素，形成 **3x4 非对称采样区域**（中心像素 `left.z` 位于左上角）：
 
-**textureGather 3x3 模块**
-- 输入: 低分辨率纹理、当前像素 UV 坐标
-- 处理: 调用 4 次 textureGather 指令，每次获取 2x2 像素块的单通道数据（R/G/B/A）
-- 输出: 4 个 2x2 像素块数据（共 16 个采样值）
+```
+      x=-2      x=-1      x=0       x=1
+      --------  --------  --------  --------
+y=-1:            [upD.y]   [upD.x]
+y= 0:  [right.z] [right.w] [left.z]  [left.w]
+y=+1:  [right.y] [right.x] [left.y]  [left.x]
+y=+2:            [upD.w]   [upD.z]
+```
 
-**edgeVote 边缘检测模块**
-- 输入: 3x3 邻域像素值
-- 处理: 
-  1. 计算水平方向差异：|p[0,1]-p[0,0]| + |p[1,1]-p[1,0]| + |p[2,1]-p[2,0]|
-  2. 计算垂直方向差异：|p[1,0]-p[0,0]| + |p[1,1]-p[0,1]| + |p[1,2]-p[0,2]|
-  3. 比较总差异与 EdgeThreshold
-- 输出: 布尔值（是否执行锐化）
+- `left` 块 = textureGather 无偏移
+- `right` 块 = textureGather 向右偏移 1 texel
+- `upDown` 块 = textureGather 向上/下偏移 1 texel
 
-**12-tap 采样模块**
-- 输入: 低分辨率纹理、UV 坐标
-- 处理: 
-  1. 使用 SampleLevel 获取当前像素颜色
-  2. 按照 12-tap 十字形模式采集邻域像素：
-     - 水平：左右各 2 个像素
-     - 垂直：上下各 2 个像素
-     - 对角：4 个对角像素
-- 输出: 12 个邻域像素颜色值
+#### 步骤 1: 纹理采集
+- **输入**: 低分辨率渲染纹理、UV 坐标
+- **处理**: textureGather 获取 2x2 像素块，SampleLevel 获取当前像素颜色
+- **输出**: 12 个邻域像素 + 当前像素颜色
 
-**计算自适应 std 模块**
-- 输入: 12 个邻域像素值
-- 处理: 
-  1. 计算均值：mean = sum(pixels) / 12
-  2. 零均值化：zeroMean[i] = pixels[i] - mean
-  3. 求绝对值总和：sumAbs = sum(abs(zeroMean))
-  4. 计算标准差：std = (sumAbs / 12)^2
-- 输出: 标准差 std（用于自适应滤波强度）
+#### 步骤 2: 边缘检测
 
-**fastLanczos2 加权模块**
-- 输入: 12 个采样点位置偏移、颜色值、std
-- 处理: 
-  1. 计算每个采样点到中心的距离：dist = sqrt(dx^2 + dy^2)
-  2. 应用 Lanczos2 核函数：weight = fastLanczos2(dist)
-  3. 根据 std 调整权重：finalWeight = weight * (1.0 + std)
-  4. 加权求和：result = sum(finalWeight * color) / sum(finalWeight)
-- 输出: 上采样后的颜色值
+使用 2x2 块中的三个像素判断是否需要锐化：
 
-**锐化 clamp 模块**
-- 输入: 上采样值、原始像素值、局部 min/max
-- 处理: 
-  1. 计算锐化增量：deltaY = edgeSharpness * (upscaled - original)
-  2. 钳制到局部范围：clamp(deltaY, minY - original, maxY - original)
-  3. 限制增量幅度：clamp(deltaY, -23/255, 23/255)
-  4. 叠加到原始颜色：output = original + deltaY
-- 输出: 锐化后的最终颜色
+```
+        left.y (正上方)
+          ●
+left.z ●   ● color (当前片段)
+(中心)
+```
 
-**输出模块**
-- 输入: 锐化后的 RGB 颜色
-- 处理: 直接输出
-- 输出: 上采样后的 RGBA 纹理
+| 符号 | 位置 | 来源 |
+|------|------|------|
+| `left.z` | 中心像素 | 2x2 块左下角 |
+| `left.y` | 正上方像素 | 2x2 块左上角 |
+| `color` | 当前片段颜色 | textureLod 采样 |
+
+**边缘投票公式：**
+```
+edgeVote = |left.z - left.y| + |color - left.y| + |color - left.z|
+```
+
+三项含义：
+1. `|left.z - left.y|`：中心与上方的颜色差 → 检测水平边缘
+2. `|color - left.y|`：当前片段与上方的颜色差
+3. `|color - left.z|`：当前片段与中心的颜色差
+
+三项相加：只有三个颜色都接近时 edgeVote 才小（平坦区域 → 跳过锐化）；任一项大 → 存在边缘 → 执行锐化。
+
+```glsl
+if (edgeVote > EdgeThreshold) {  // 默认阈值 8/255
+    // 执行锐化
+} else {
+    // 跳过锐化，直接输出原始颜色
+}
+```
+
+#### 步骤 3: 局部统计
+
+对 12 个邻域像素计算自适应标准差：
+
+1. 计算均值：`mean = sum / 12`
+2. 零均值化：每个像素减去均值
+3. 求绝对值总和：`sumAbs = sum(|pixel - mean|)`
+4. 计算自适应标准差：`std = (2.181818 / sumAbs)^2`
+
+**std 的作用**：std 大 → 邻域差异大（边缘/纹理）→ Lanczos 权重增大 → 保留更多细节；std 小 → 平坦区域 → 权重减小 → 平滑噪声。
+
+#### 步骤 4: Lanczos 加权
+
+对 12 个采样点使用 fastLanczos2 核函数加权求和：
+
+```
+weight = fastLanczos2(distance² × 0.55 + clamp(|color|×std, 0, 1))
+result = sum(weight × color) / sum(weight)
+```
+
+#### 步骤 5: 锐化与裁剪
+
+1. 计算锐化增量：`deltaY = edgeSharpness × (finalY - originalY)`
+2. 钳制到局部范围：`clamp(deltaY, minY - originalY, maxY - originalY)`
+3. 限制增量范围：`clamp(deltaY, -23/255, 23/255)`
+4. 叠加到原始 RGB：`output = original + deltaY`
 
 ---
 
-### V2 多 Pass 流程详解
+### V2 算法（时间性上采样）
 
 ```mermaid
 flowchart TD
-    subgraph Convert["Convert Pass<br/>预处理"]
-        C1[深度纹理] --> C2[3x3最近深度膨胀]
-        C2 --> C3[运动矢量解码]
-        C3 --> C4[clipToPrevClip重投影]
-        C4 --> C5[深度裁剪权重]
-        
-        C6[RGB颜色] --> C7[色调映射]
-        C7 --> C8[RGB→YCoCg]
-        C8 --> C9[量化打包R32UI]
+    subgraph Convert Pass
+        A1[深度纹理] --> A2[3x3最近深度膨胀]
+        A2 --> A3[运动矢量解码]
+        A3 --> A4[clipToPrevClip重投影]
+        A4 --> A5[深度裁剪权重]
+        A6[RGB颜色] --> A7[色调映射]
+        A7 --> A8[RGB→YCoCg]
+        A8 --> A9[量化打包R32UI]
     end
 
-    subgraph Upscale["Upscale Pass<br/>上采样+混合"]
-        U1[运动重投影] --> U2[获取历史帧]
-        U2 --> U3[5-9点Lanczos]
-        U3 --> U4[方差盒裁剪]
-        U4 --> U5[深度感知混合权重]
-        U5 --> U6[历史帧+当前帧混合]
-        U6 --> U7[YCoCg→RGB]
-        U7 --> U8[曝光补偿]
+    subgraph Upscale Pass
+        B1[运动重投影] --> B2[获取历史帧]
+        B2 --> B3[5-9点Lanczos上采样]
+        B3 --> B4[方差盒裁剪]
+        B4 --> B5[深度感知混合权重]
+        B5 --> B6[历史帧+当前帧混合]
+        B6 --> B7[YCoCg→RGB反转换]
+        B7 --> B8[曝光补偿]
     end
 
-    C5 --> U5
-    C9 --> U3
+    A5 --> B5
+    A9 --> B3
 
-    style C5 stroke:#888,stroke-width:2px
-    style U4 stroke:#888,stroke-width:2px
+    style A5 stroke:#888,stroke-width:2px
+    style B4 stroke:#888,stroke-width:2px
 ```
 
-#### V2 流程详细说明
-
-**Convert Pass - 深度膨胀模块**
-- 输入: 深度纹理（D24S8 格式）
+**Convert Pass - 步骤 1: 深度膨胀**
+- 输入: 深度纹理（D24S8）
 - 处理: 
   1. 4 次 textureGather 获取 4x4 邻域的深度值
-  2. 对每个 2x2 块计算最近深度：min(d00, d01, d10, d11)
-  3. 填补深度边缘的空洞
-- 输出: 膨胀后的深度数据（用于后续深度裁剪）
+  2. 计算每个 2x2 块中的最近深度
+  3. 填补深度边缘的空洞，避免后续采样出现深度跳变
+- 输出: 膨胀后的深度数据
 
-**Convert Pass - 运动矢量解码模块**
+**输出效果与影响：**
+```
+膨胀后深度 大（接近1.0）：
+→ 像素距离摄像机远
+→ 深度裁剪权重小
+→ 历史帧混合权重小
+
+膨胀后深度 小（接近0.0）：
+→ 像素距离摄像机近
+→ 深度裁剪权重大
+→ 历史帧混合权重大
+```
+
+**Convert Pass - 步骤 2: 运动矢量解码**
 - 输入: 编码运动矢量纹理（RGBA 格式）
 - 处理: 
   1. 解码运动矢量：velocity = (encoded - 32767/65535) / 0.2495
-  2. 对静态物体（velocity ≈ 0），使用 clipToPrevClip 矩阵重投影：
-     - 当前帧裁剪空间坐标：clipPos = position * projection * view
-     - 前一帧裁剪空间坐标：prevClipPos = clipPos * clipToPrevClip
-     - 前一帧 UV：prevUV = prevClipPos.xy / prevClipPos.w * 0.5 + 0.5
+  2. 对静态物体（velocity ≈ 0），使用 clipToPrevClip 矩阵重投影
 - 输出: 解码后的运动矢量
 
-**Convert Pass - 深度裁剪权重模块**
+**输出效果与影响：**
+```
+velocity 大（如 > 0.1）：
+→ 物体运动快
+→ 历史帧采样位置偏移大
+→ 时间性混合效果明显
+
+velocity 小（如 < 0.01）：
+→ 物体静止或运动慢
+→ 历史帧采样位置接近当前帧
+→ 时间性混合效果较弱
+```
+
+**运动矢量编码公式：**
+```
+encode = velocity * 0.2495 + 32767/65535
+decode = (encoded - 32767/65535) / 0.2495
+
+编码范围：
+- velocity = 0 → encoded = 0.5（静态物体）
+- velocity = ±1 → encoded = 0.25 或 0.75
+```
+
+**Convert Pass - 步骤 3: 深度裁剪权重**
 - 输入: 当前帧深度、历史帧深度
 - 处理: 
   1. 比较当前帧与历史帧的深度差异
   2. 计算深度裁剪权重：weight = 1.0 - abs(currentDepth - historyDepth)
   3. 钳制权重范围：clamp(weight, 0.0, 1.0)
-- 输出: 深度裁剪权重（用于 Upscale Pass 的混合）
+- 输出: 深度裁剪权重
 
-**Convert Pass - 色彩转换与打包模块**
+**输出效果与影响：**
+```
+weight 大（如 > 0.8）：
+→ 当前帧与历史帧深度接近
+→ 历史帧可信度高
+→ 混合时历史帧权重增大
+
+weight 小（如 < 0.2）：
+→ 当前帧与历史帧深度差异大
+→ 历史帧不可信（可能是遮挡/被遮挡）
+→ 混合时历史帧权重减小
+```
+
+**Convert Pass - 步骤 4: 色彩转换与打包**
 - 输入: RGB 颜色
 - 处理: 
   1. 简单色调映射：color = color / (1.0 + color)
@@ -505,23 +341,60 @@ flowchart TD
      - Cg = G - 0.5*R - 0.5*B
   3. 量化：Y 11位，Co 11位，Cg 10位
   4. 打包为 uint32：(Y << 22) | (Co << 11) | Cg
-- 输出: YCoCgColor（R32UI 纹理，32-bit 存储 3 通道）
+- 输出: YCoCgColor（R32UI 纹理）
 
-**Upscale Pass - 运动重投影模块**
+**输出效果与影响：**
+```
+Y 通道（亮度）：
+→ 人眼对亮度更敏感
+→ 使用更高精度（11位）
+→ 后续处理优先保证 Y 通道质量
+
+Co/Cg 通道（色度）：
+→ 人眼对色度不敏感
+→ 使用较低精度（11/10位）
+→ 节省带宽（32-bit vs 64-bit）
+```
+
+**Upscale Pass - 步骤 1: 运动重投影**
 - 输入: 运动矢量、当前帧 UV
 - 处理: 
   1. 使用运动矢量计算历史帧 UV：prevUV = currentUV + velocity
   2. 钳制 UV 范围：clamp(prevUV, 0.0, 1.0)
 - 输出: 历史帧采样 UV
 
-**Upscale Pass - 获取历史帧模块**
+**输出效果与影响：**
+```
+prevUV 接近 currentUV：
+→ 物体静止或运动慢
+→ 历史帧采样位置接近当前帧
+→ 时间性混合效果较弱
+
+prevUV 远离 currentUV：
+→ 物体运动快
+→ 历史帧采样位置偏移大
+→ 时间性混合效果明显
+```
+
+**Upscale Pass - 步骤 2: 获取历史帧**
 - 输入: 历史帧缓存、重投影 UV
 - 处理: 
   1. 使用 textureLod 采样历史帧
   2. 使用 textureGather 获取历史帧的 2x2 邻域
-- 输出: 历史帧颜色值（YCoCg 格式）
+- 输出: 历史帧颜色值
 
-**Upscale Pass - Lanczos 上采样模块**
+**输出效果与影响：**
+```
+历史帧颜色 准确：
+→ 时间性混合效果好
+→ 图像稳定，无闪烁
+
+历史帧颜色 不准确（如遮挡/被遮挡）：
+→ 时间性混合效果差
+→ 可能产生鬼影
+```
+
+**Upscale Pass - 步骤 3: Lanczos 上采样**
 - 输入: 当前帧 YCoCg 纹理、采样点位置
 - 处理: 
   1. 使用 texelFetch 获取 5-9 个采样点
@@ -531,7 +404,20 @@ flowchart TD
   3. 对 Y 通道使用更高精度
 - 输出: 上采样后的 YCoCg 颜色
 
-**Upscale Pass - 方差盒裁剪模块**
+**Lanczos 滤波器特性：**
+```
+fastLanczos2(x) = (x-4)^2 * (x*(x-4)-(x-4))
+
+特性：
+- x=0: weight=0（中心点权重为0，特殊处理）
+- x=1: weight=9（最大权重）
+- x=2: weight=4
+- x=3: weight=1
+- x=4: weight=0（窗口边界）
+- x>4: weight=0（窗外）
+```
+
+**Upscale Pass - 步骤 4: 方差盒裁剪**
 - 输入: 上采样结果、历史帧颜色
 - 处理: 
   1. 计算局部均值：mean = (min + max) / 2
@@ -540,7 +426,18 @@ flowchart TD
   4. 限制颜色变化范围，抑制鬼影
 - 输出: 裁剪后的历史帧颜色
 
-**Upscale Pass - 深度感知混合权重模块**
+**输出效果与影响：**
+```
+裁剪后历史帧颜色 接近上采样结果：
+→ 历史帧可信度高
+→ 时间性混合效果好
+
+裁剪后历史帧颜色 与上采样结果差异大：
+→ 历史帧不可信（可能是鬼影）
+→ 时间性混合效果差
+```
+
+**Upscale Pass - 步骤 5: 深度感知混合**
 - 输入: 当前帧颜色、历史帧颜色、深度裁剪权重
 - 处理: 
   1. 计算混合权重：weight = depthClipWeight * motionWeight
@@ -548,7 +445,29 @@ flowchart TD
   3. 钳制权重范围：clamp(weight, minLerp, maxLerp)
 - 输出: 混合后的 YCoCg 颜色
 
-**Upscale Pass - 色彩反转换模块**
+**输出效果与影响：**
+```
+weight 大（如 > 0.8）：
+→ 历史帧权重更大
+→ 时间性混合效果明显
+→ 图像更稳定
+
+weight 小（如 < 0.2）：
+→ 当前帧权重更大
+→ 时间性混合效果较弱
+→ 图像更清晰
+```
+
+**混合公式：**
+```
+result = current * (1 - weight) + history * weight
+
+weight=0: result = current（完全使用当前帧）
+weight=0.5: result = 0.5*current + 0.5*history（各占50%）
+weight=1: result = history（完全使用历史帧）
+```
+
+**Upscale Pass - 步骤 6: 色彩反转换**
 - 输入: 混合后的 YCoCg 颜色
 - 处理: 
   1. 反量化：Y = Y_11bit / 2047, Co = Co_11bit / 2047, Cg = Cg_10bit / 1023
@@ -559,12 +478,26 @@ flowchart TD
   3. 反色调映射：color = color / (1.0 - color)
 - 输出: RGB 颜色
 
-**Upscale Pass - 曝光补偿模块**
+**Upscale Pass - 步骤 7: 曝光补偿**
 - 输入: 上采样后的 RGB 颜色、曝光参数
 - 处理: 
   1. 应用曝光：color = color * preExposure
   2. 钳制输出范围：clamp(color, 0.0, 1.0)
 - 输出: 最终 SceneColorOutput
+
+**输出效果与影响：**
+```
+preExposure 大（如 > 1.0）：
+→ 图像整体变亮
+→ 高光区域可能过曝
+
+preExposure 小（如 < 1.0）：
+→ 图像整体变暗
+→ 暗部区域可能欠曝
+
+preExposure = 1.0：
+→ 保持原始亮度
+```
 
 ---
 
@@ -597,8 +530,6 @@ graph TD
     style L stroke:#888,stroke-width:2px
     style Q stroke:#888,stroke-width:2px
 ```
-
-#### 调用关系详细说明
 
 **V1 调用链**
 - SnapdragonGameSuperResolution: V1 入口函数
@@ -652,4 +583,12 @@ UBO/Constant Buffer（V2）：包含 renderSize、displaySize、jitterOffset（H
 
 ## Connections
 
+- [[fidelityfx-fsr-1]]: AMD FSR 1.0 也是空间超分辨率算法，但不支持时间性融合
+- [[ReinforcementLearning]]: SGSR V2 的运动矢量解码可用于强化学习中的动作预测
+- [[DeepLearning]]: 现代超分辨率算法（如 DLSS、FSR 2.0）使用深度学习，SGSR 是传统算法
+
 ## Contradictions
+
+- SGSR V1 是单 Pass 空间算法，V2 是多 Pass 时间性算法，两者设计理念不同
+- SGSR 专为 Adreno GPU 优化，其他 GPU 性能可能不佳
+- SGSR V2 需要运动矢量，不支持无运动矢量的场景
