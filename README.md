@@ -22,11 +22,13 @@ wiki/
 graph/
 ├── graph.json        persistent node/edge data (SHA256-cached)
 └── graph.html        interactive vis.js visualization — open in any browser
+raw/
+├── codes/            git clone 的代码仓库（按需创建）
 ```
 
 ## Install
 
-**Requires:** [Claude Code](https://claude.ai/code), [Codex](https://openai.com/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), or any agent that reads a config file.
+**Requires:** [Claude Code](https://claude.ai/code), [Codex](https://openai.com/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [MiMoCode](https://github.com/xiaomi/mimocode), [OpenCode](https://github.com/opencode-ai/opencode), or any agent that reads a config file.
 
 ```bash
 git clone https://github.com/SamurAIGPT/llm-wiki-agent.git
@@ -40,6 +42,7 @@ claude      # reads CLAUDE.md + .claude/commands/ (slash commands available)
 codex       # reads AGENTS.md
 opencode    # reads AGENTS.md
 gemini      # reads GEMINI.md
+mimocode    # reads AGENTS.md
 ```
 
 ## Usage
@@ -82,6 +85,28 @@ Works with markdown, PDF, DOCX, PPTX, XLSX, HTML, TXT, CSV, JSON, XML, RST, EPUB
 **Knowledge graph** — `graph.html` shows every wiki page as a node, every `[[wikilink]]` as an edge, and Claude-inferred implicit relationships as dotted edges. Community detection clusters related topics.
 
 **Lint reports** — orphan pages, broken links, missing entity pages, data gaps with suggested sources to fill them.
+
+## Agent Orchestration
+
+Agent 通过文件传输协议编排 LLM 调用，自身不读大文件：
+
+```bash
+# Phase 1: 脚本写 prompt 到 /tmp/wiki-tasks/
+python tools/filter.py --phase1
+
+# Agent spawn 子代理处理每个 prompt 文件
+# 子代理读 /tmp/wiki-tasks/<id>.json，写结果到 /tmp/wiki-results/<id>.txt
+
+# Phase 2: 脚本读结果，继续处理
+python tools/filter.py --phase2
+```
+
+支持 phase1/phase2 的脚本：`filter.py` `deep-read.py` `ingest.py` `lint.py` `heal.py` `query.py` `build_graph.py`
+
+Token 优化：
+- Prompt 压缩 40-50%
+- 内容截断可通过 `WIKI_MAX_CONTENT_CHARS` 环境变量配置
+- 子代理并行处理多个任务
 
 ## Use Cases
 
@@ -196,7 +221,7 @@ The schema file tells the agent how to maintain the wiki — page formats, inges
 | Agent | Schema file |
 |---|---|
 | Claude Code | `CLAUDE.md` |
-| Codex / OpenCode | `AGENTS.md` |
+| Codex / OpenCode / MiMoCode | `AGENTS.md` |
 | Gemini CLI | `GEMINI.md` |
 
 ## What Makes This Different from RAG

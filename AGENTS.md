@@ -71,7 +71,8 @@ Run `python tools/status.py` — checks pipeline state and suggests next step.
 raw/          inbox/  inbox.md
               inbox/  YYYY-MM-DD/  *.md
                digest/  brief.md  YYYY-MM-DD/{deepdive-*/,}  sources/YYYY-MM-DD/  brief/
-              filter/ papers/ articles/ talks/ books/ projects/ docs/ datasets/ codes/
+              filter/ papers/ articles/ talks/ books/ projects/ docs/ datasets/
+              codes/  git clone 的代码仓库（按需创建）
 wiki/         index.md log.md overview.md issues.md interests.md
               sources/ entities/ concepts/ syntheses/
 graph/        graph.json graph.html
@@ -196,6 +197,18 @@ Use `[[PageName]]` wikilinks to link to other wiki pages.
 Triggered by: *"read code"* or *"代码阅读"*
 
 **核心原则**: 全流程由子代理完成，主 agent 仅负责 spawn，避免占用主 agent 上下文。
+
+### 代码获取
+
+当需要阅读的代码不在本地时：
+1. Git 仓库 → `git clone <url> raw/codes/<project-name>`
+2. 单个文件 → 直接读取或下载到 `raw/codes/`
+3. 已在本地 → 直接使用
+
+**仅在以下情况 clone**：
+- 用户提问需要看代码才能解答
+- 用户明确要求阅读某个代码仓库
+- 不要无故 clone 不相关的代码
 
 ### 子代理工作流
 
