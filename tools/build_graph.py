@@ -38,7 +38,7 @@ except ImportError:
     HAS_NETWORKX = False
     print("Warning: networkx not installed. Community detection disabled. Run: pip install networkx")
 
-from _utils import read_file
+from _utils import read_file, prepare_tasks, read_results, clean_task_dirs, TASK_DIR
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
@@ -214,7 +214,42 @@ def append_checkpoint(page_id_str: str, edges: list[dict]):
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: dict, resume: bool = True) -> list[dict]:
+def build_infer_prompt(src: str, content: str, node_list: str, existing_edge_summary: str) -> str:
+    """Build the LLM prompt for inferring semantic relationships for a single page."""
+    return f"""Analyze this wiki page and identify implicit semantic relationships to other pages in the wiki.
+
+Source page: {src}
+Content:
+{content}
+
+All available pages:
+{node_list}
+
+Already-extracted edges from this page:
+{existing_edge_summary}
+
+Return ONLY a JSON object containing an "edges" array of NEW relationships not already captured by explicit wikilinks. The response must be STRICTLY valid JSON formatted exactly like this:
+{{
+  "edges": [
+    {{"to": "page-id", "relationship": "one-line description", "confidence": 0.0-1.0, "type": "INFERRED or AMBIGUOUS"}}
+  ]
+}}
+
+CRITICAL INSTRUCTION:
+YOU MUST RETURN ONLY A RAW JSON STRING BEGINNING WITH {{ AND ENDING WITH }}.
+DO NOT OUTPUT BULLET POINTS. DO NOT OUTPUT MARKDOWN LISTS.
+ANY CONVERSATIONAL PREAMBLE WILL CAUSE A SYSTEM CRASH.
+
+Rules:
+- Only include pages from the available list above
+- Confidence >= 0.7 → INFERRED, < 0.7 → AMBIGUOUS
+- Do not repeat edges already in the extracted list
+- Return {{"edges": []}} if no new relationships found
+"""
+
+
+def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: dict,
+                         resume: bool = True, phase1: bool = False, phase2: bool = False) -> list[dict]:
     """Pass 2: API-inferred semantic relationships with checkpoint/resume."""
     checkpoint_edges, completed_ids = ([], set())
     if resume:
@@ -266,6 +301,86 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
         f"- {e['from']} → {e['to']} (EXTRACTED)" for e in existing_edges[:30]
     )
 
+    # Phase 1: write prompts to files
+    if phase1:
+        tasks = []
+        for p in changed_pages:
+            full_content = read_file(p)
+            content = full_content[:2000]
+            src = page_id(p)
+            prompt = build_infer_prompt(src, content, node_list, existing_edge_summary)
+            tasks.append({
+                "id": f"graph_{src}",
+                "prompt": prompt,
+                "max_tokens": 1024,
+                "metadata": {"src": src, "page_path": str(p)},
+            })
+        prepare_tasks(tasks)
+        return new_edges
+
+    # Phase 2: read results from files
+    if phase2:
+        results_map = read_results()
+        for p in changed_pages:
+            src = page_id(p)
+            tid = f"graph_{src}"
+            raw = results_map.get(tid, "")
+            if not raw:
+                print(f"    [{src}] no result")
+                continue
+            try:
+                raw = raw.strip()
+                match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", raw)
+                if match:
+                    raw = match.group(0)
+                inferred = json.loads(raw)
+                if isinstance(inferred, dict):
+                    edges_list = inferred.get("edges", [])
+                elif isinstance(inferred, list):
+                    edges_list = inferred
+                else:
+                    edges_list = []
+
+                page_edges = []
+                valid_rels = []
+                for rel in edges_list:
+                    if isinstance(rel, dict) and "to" in rel:
+                        confidence = float(rel.get("confidence", 0.7))
+                        rel_type = rel.get("type") or ("INFERRED" if confidence >= 0.7 else "AMBIGUOUS")
+                        edge = {
+                            "id": edge_id(src, rel["to"], rel_type),
+                            "from": src,
+                            "to": rel["to"],
+                            "type": rel_type,
+                            "title": rel.get("relationship", ""),
+                            "label": "",
+                            "color": EDGE_COLORS.get(rel_type, EDGE_COLORS["INFERRED"]),
+                            "confidence": confidence,
+                        }
+                        page_edges.append(edge)
+                        new_edges.append(edge)
+                        valid_rels.append({
+                            "to": rel["to"],
+                            "relationship": rel.get("relationship", ""),
+                            "confidence": confidence,
+                            "type": rel_type,
+                        })
+
+                full_content = read_file(p)
+                cache[str(p)] = {
+                    "hash": sha256(full_content),
+                    "edges": valid_rels,
+                }
+                append_checkpoint(src, page_edges)
+                print(f"    [{src}] Found {len(page_edges)} edges.")
+            except (json.JSONDecodeError, TypeError, ValueError) as jde:
+                print(f"    [{src}] Invalid JSON: {str(jde)[:60]}")
+            except Exception as e:
+                print(f"    [{src}] Error: {str(e)[:80]}")
+        clean_task_dirs()
+        return new_edges
+
+    # Normal mode: direct LLM calls
     for i, p in enumerate(changed_pages, 1):
         full_content = read_file(p)
         content = full_content[:2000]
@@ -273,36 +388,7 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
         global_idx = already_done + i
         print(f"    [{global_idx}/{grand_total}] Inferring for '{src}'... ", end="", flush=True)
 
-        prompt = f"""Analyze this wiki page and identify implicit semantic relationships to other pages in the wiki.
-
-Source page: {src}
-Content:
-{content}
-
-All available pages:
-{node_list}
-
-Already-extracted edges from this page:
-{existing_edge_summary}
-
-Return ONLY a JSON object containing an "edges" array of NEW relationships not already captured by explicit wikilinks. The response must be STRICTLY valid JSON formatted exactly like this:
-{{
-  "edges": [
-    {{"to": "page-id", "relationship": "one-line description", "confidence": 0.0-1.0, "type": "INFERRED or AMBIGUOUS"}}
-  ]
-}}
-
-CRITICAL INSTRUCTION:
-YOU MUST RETURN ONLY A RAW JSON STRING BEGINNING WITH {{ AND ENDING WITH }}.
-DO NOT OUTPUT BULLET POINTS. DO NOT OUTPUT MARKDOWN LISTS.
-ANY CONVERSATIONAL PREAMBLE WILL CAUSE A SYSTEM CRASH.
-
-Rules:
-- Only include pages from the available list above
-- Confidence >= 0.7 → INFERRED, < 0.7 → AMBIGUOUS
-- Do not repeat edges already in the extracted list
-- Return {{"edges": []}} if no new relationships found
-"""
+        prompt = build_infer_prompt(src, content, node_list, existing_edge_summary)
         page_edges = []
         valid_rels = []
         try:
@@ -1200,7 +1286,8 @@ def append_log(entry: str):
 
 
 def build_graph(infer: bool = True, open_browser: bool = False, clean: bool = False,
-                report: bool = False, save: bool = False):
+                report: bool = False, save: bool = False,
+                phase1: bool = False, phase2: bool = False):
     pages = all_wiki_pages()
     today = date.today().isoformat()
 
@@ -1227,10 +1314,12 @@ def build_graph(infer: bool = True, open_browser: bool = False, clean: bool = Fa
     # Pass 2: inferred edges
     if infer:
         print("  Pass 2: inferring semantic relationships...")
-        inferred = build_inferred_edges(pages, edges, cache, resume=not clean)
+        inferred = build_inferred_edges(pages, edges, cache, resume=not clean,
+                                        phase1=phase1, phase2=phase2)
         edges.extend(inferred)
         print(f"  → {len(inferred)} inferred edges")
-        save_cache(cache)
+        if not phase1:  # Don't save cache in phase1 mode
+            save_cache(cache)
 
     # Deduplicate edges
     before_dedup = len(edges)
@@ -1293,6 +1382,8 @@ if __name__ == "__main__":
     parser.add_argument("--clean", action="store_true", help="Delete checkpoint and force full re-inference")
     parser.add_argument("--report", action="store_true", help="Generate graph health report")
     parser.add_argument("--save", action="store_true", help="Save report to graph/graph-report.md")
+    parser.add_argument("--phase1", action="store_true", help="Write prompts to files for subagent processing")
+    parser.add_argument("--phase2", action="store_true", help="Read results from subagent processing")
     args = parser.parse_args()
     build_graph(infer=not args.no_infer, open_browser=args.open, clean=args.clean,
-                report=args.report, save=args.save)
+                report=args.report, save=args.save, phase1=args.phase1, phase2=args.phase2)

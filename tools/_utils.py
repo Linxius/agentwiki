@@ -89,6 +89,74 @@ def extract_wikilinks(content):
     return re.findall(r'\[\[([^\]]+)\]\]', content)
 
 
+# ── File-based task protocol ──
+# Scripts write prompts to files, agent spawns subagents to process them,
+# subagents write results back to files. Agent never reads large content.
+
+TASK_DIR = Path(os.environ.get("WIKI_TASK_DIR", "/tmp/wiki-tasks"))
+RESULT_DIR = Path(os.environ.get("WIKI_RESULT_DIR", "/tmp/wiki-results"))
+
+
+def prepare_task(task_id: str, prompt: str, max_tokens: int = 8192,
+                 metadata: dict = None) -> Path:
+    """Write prompt to file, return the file path."""
+    TASK_DIR.mkdir(parents=True, exist_ok=True)
+    task_file = TASK_DIR / f"{task_id}.json"
+    payload = {
+        "id": task_id,
+        "prompt": prompt,
+        "max_tokens": max_tokens,
+        "metadata": metadata or {},
+    }
+    task_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return task_file
+
+
+def prepare_tasks(tasks: list[dict]) -> Path:
+    """Write multiple tasks, return manifest path.
+
+    Each task dict: {id, prompt, max_tokens, metadata}
+    """
+    TASK_DIR.mkdir(parents=True, exist_ok=True)
+    manifest = {"tasks": []}
+    for t in tasks:
+        prepare_task(t["id"], t["prompt"], t.get("max_tokens", 8192), t.get("metadata"))
+        manifest["tasks"].append({
+            "id": t["id"],
+            "prompt_file": str(TASK_DIR / f"{t['id']}.json"),
+        })
+    manifest_path = TASK_DIR / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"📤 {len(tasks)} 个任务已写入 {TASK_DIR}")
+    return manifest_path
+
+
+def read_result(task_id: str) -> str:
+    """Read result content from file."""
+    result_file = RESULT_DIR / f"{task_id}.txt"
+    if result_file.exists():
+        return result_file.read_text(encoding="utf-8")
+    return ""
+
+
+def read_results() -> dict[str, str]:
+    """Read all results from RESULT_DIR. Returns {task_id: content}."""
+    results = {}
+    if RESULT_DIR.exists():
+        for f in RESULT_DIR.glob("*.txt"):
+            results[f.stem] = f.read_text(encoding="utf-8")
+    return results
+
+
+def clean_task_dirs():
+    """Clean up task and result directories."""
+    import shutil
+    if TASK_DIR.exists():
+        shutil.rmtree(TASK_DIR, ignore_errors=True)
+    if RESULT_DIR.exists():
+        shutil.rmtree(RESULT_DIR, ignore_errors=True)
+
+
 def all_wiki_pages():
     pages = set()
     for p in WIKI_DIR.rglob("*.md"):

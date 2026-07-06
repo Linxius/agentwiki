@@ -9,6 +9,8 @@ Usage:
     python tools/ingest.py slides.pptx notes.docx       # batch, mixed formats
     python tools/ingest.py raw/mixed/ --no-convert      # skip auto-conversion
     python tools/ingest.py --validate-only              # run validation only
+    python tools/ingest.py --phase1                     # write prompts to files for subagent
+    python tools/ingest.py --phase2                     # read results from subagent
 
 Supported formats (auto-converted via markitdown):
     .pdf .docx .pptx .xlsx .html .htm .txt .csv .json .xml
@@ -22,6 +24,11 @@ The LLM reads the source, extracts knowledge, and updates the wiki:
   - Appends to wiki/log.md
   - Flags contradictions
   - Runs post-ingest validation (broken links, index coverage)
+
+Phase 1/2 file transfer protocol:
+  --phase1: Build prompt and write to /tmp/wiki-tasks/ for subagent processing.
+  --phase2: Read subagent results from /tmp/wiki-results/ and continue processing.
+  This avoids LLM calls in the main agent; subagents handle LLM推理.
 """
 
 import os
@@ -35,12 +42,10 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import date
 
-from _utils import read_file, write_file, call_llm, sha256, parse_json_from_response
-from _utils import inject_source_url, extract_wikilinks, all_wiki_pages
-
 from _utils import (read_file, write_file, call_llm, sha256,
                     parse_json_from_response, inject_source_url,
-                    extract_wikilinks, all_wiki_pages)
+                    extract_wikilinks, all_wiki_pages,
+                    prepare_tasks, read_results, clean_task_dirs, TASK_DIR)
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
@@ -153,37 +158,35 @@ def parse_interests(content: str) -> list[dict]:
     return interests
 
 
-def update_interests_from_ingest(created_entity_pages: list[dict], created_concept_pages: list[dict]):
-    """Extract new interests from newly created entity/concept pages and update wiki/interests.md.
-    
-    Only adds new interests that don't already exist in interests.md.
+def build_interest_extraction_prompt(created_entity_pages: list[dict],
+                                    created_concept_pages: list[dict]) -> str | None:
+    """Build prompt for extracting new interests from entity/concept pages.
+
+    Returns None if there's nothing to extract.
     """
     if not created_entity_pages and not created_concept_pages:
-        return
-    
+        return None
+
     interests_content = read_file(INTERESTS_FILE)
     existing_interests = parse_interests(interests_content) if interests_content else []
-    existing_names = {i["name"] for i in existing_interests}
-    
+
     if not existing_interests:
-        print("\n  提示: wiki/interests.md 为空，请先添加兴趣点。")
-        return
-    
-    # Collect all entity/concept content
+        return None
+
     all_content = ""
     for page in created_entity_pages + created_concept_pages:
         all_content += page.get("content", "") + "\n"
-    
+
     if not all_content.strip():
-        return
-    
+        return None
+
     schema = read_file(SCHEMA_FILE)
     interests_desc = ""
     for interest in existing_interests:
         kw_str = ", ".join(interest.get("keywords", []))
         interests_desc += f"兴趣{interest['name']}: 权重={interest['weight']}, 关键词=[{kw_str}], 描述={interest.get('description', '')}\n"
-    
-    prompt = f"""You are extracting new research interests from wiki entity/concept pages.
+
+    return f"""You are extracting new research interests from wiki entity/concept pages.
 
 Schema and conventions:
 {schema}
@@ -213,7 +216,21 @@ Return ONLY a valid JSON object:
   "reason": "explanation"
 }}
 """
-    
+
+
+def update_interests_from_ingest(created_entity_pages: list[dict], created_concept_pages: list[dict]):
+    """Extract new interests from newly created entity/concept pages and update wiki/interests.md.
+
+    Only adds new interests that don't already exist in interests.md.
+    """
+    prompt = build_interest_extraction_prompt(created_entity_pages, created_concept_pages)
+    if not prompt:
+        interests_content = read_file(INTERESTS_FILE)
+        existing_interests = parse_interests(interests_content) if interests_content else []
+        if not existing_interests:
+            print("\n  提示: wiki/interests.md 为空，请先添加兴趣点。")
+        return
+
     try:
         raw = call_llm(prompt, max_tokens=2048)
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
@@ -227,7 +244,12 @@ Return ONLY a valid JSON object:
     if not new_interests:
         print("\n  未发现新兴趣点。")
         return
-    
+
+    # Read existing interests for dedup
+    interests_content = read_file(INTERESTS_FILE)
+    existing_interests = parse_interests(interests_content) if interests_content else []
+    existing_names = {i["name"] for i in existing_interests}
+
     # Filter out interests that already exist
     new_to_add = [ni for ni in new_interests if ni["name"] not in existing_names]
     
@@ -513,6 +535,56 @@ def copy_referenced_images(report_content, slug, tmp_image_dir):
     return count
 
 
+def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
+                        url_instruction, today, source_content, wiki_context,
+                        schema, img_prompt_section):
+    """Build the LLM prompt for ingesting a source document."""
+    return f"""You are maintaining an LLM Wiki. Process this source document and integrate its knowledge into the wiki.
+
+Schema and conventions:
+{schema}
+
+Current wiki state (index + recent pages):
+{wiki_context if wiki_context else "(wiki is empty — this is the first source)"}
+
+New source to ingest (file: {source_file_repo}):
+source_file (repo-relative): {source_file_repo}
+raw_relative_path: {raw_relative_path} (use this path from wiki/sources/<slug>.md to the raw file in the "## 原始出处" section)
+source_url: {source_url_display}
+
+=== SOURCE START ===
+{source_content}
+=== SOURCE END ===
+
+Today's date: {today}
+
+IMPORTANT source_page instructions:
+- Use the source page format from the schema matching the file path (paper/article/book/etc).
+- Set frontmatter `source_file:` to "{source_file_repo}".
+- {url_instruction}
+- Include a "## 原始出处" section after Summary with:
+  - 原始文件: [{source_file_repo}]({raw_relative_path}) — relative link to raw file
+  - 原文链接: [{{url}}]({{url}}) — original source URL (if available)
+{img_prompt_section}
+Return ONLY a valid JSON object with these fields (no markdown fences, no prose outside the JSON):
+{{
+  "title": "Human-readable title for this source",
+  "slug": "kebab-case-slug-for-filename",
+  "source_page": "full markdown content for wiki/sources/<slug>.md — use the source page format from the schema. CRITICAL: Aggressively convert key people, products, concepts and projects into [[Wikilinks]] inline in the text. Omitting [[ ]] for known terms is a failure.",
+  "index_entry": "- [Title](sources/slug.md) — one-line summary",
+  "overview_update": "full updated content for wiki/overview.md, or null if no update needed",
+  "entity_pages": [
+    {{"path": "entities/EntityName.md", "content": "full markdown content"}}
+  ],
+  "concept_pages": [
+    {{"path": "concepts/ConceptName.md", "content": "full markdown content"}}
+  ],
+  "contradictions": ["describe any contradiction with existing wiki content, or empty list"],
+  "log_entry": "## [{today}] ingest | <title>\\n\\nAdded source. Key claims: ..."
+}}
+"""
+
+
 def ingest(source_path: str, auto_convert: bool = True):
     source = Path(source_path)
     if not source.exists():
@@ -585,53 +657,41 @@ def ingest(source_path: str, auto_convert: bool = True):
     wiki_context = build_wiki_context()
     schema = read_file(SCHEMA_FILE)
 
-    prompt = f"""You are maintaining an LLM Wiki. Process this source document and integrate its knowledge into the wiki.
+    prompt = build_ingest_prompt(
+        source_file_repo, raw_relative_path, source_url_display,
+        url_instruction, today, source_content, wiki_context,
+        schema, img_prompt_section,
+    )
 
-Schema and conventions:
-{schema}
+    # ── Phase 1: write prompt to file for subagent ──
+    if "--phase1" in sys.argv:
+        task_id = f"ingest_{source.stem}"
+        prepare_tasks([{
+            "id": task_id,
+            "prompt": prompt,
+            "max_tokens": 8192,
+            "metadata": {
+                "source_path": str(source.relative_to(REPO_ROOT)),
+                "tmp_img_dir": str(tmp_img_dir) if tmp_img_dir else "",
+                "today": today,
+            },
+        }])
+        return
 
-Current wiki state (index + recent pages):
-{wiki_context if wiki_context else "(wiki is empty — this is the first source)"}
+    # ── Phase 2: read result from subagent ──
+    if "--phase2" in sys.argv:
+        task_id = f"ingest_{source.stem}"
+        results_map = read_results()
+        raw = results_map.get(task_id, "")
+        if not raw:
+            print(f"Error: no result found for {task_id}")
+            sys.exit(1)
+        clean_task_dirs()
+    else:
+        # Default mode: direct LLM call
+        print(f"  calling API (model: ...)")
+        raw = call_llm(prompt, max_tokens=8192)
 
-New source to ingest (file: {source_file_repo}):
-source_file (repo-relative): {source_file_repo}
-raw_relative_path: {raw_relative_path} (use this path from wiki/sources/<slug>.md to the raw file in the "## 原始出处" section)
-source_url: {source_url_display}
-
-=== SOURCE START ===
-{source_content}
-=== SOURCE END ===
-
-Today's date: {today}
-
-IMPORTANT source_page instructions:
-- Use the source page format from the schema matching the file path (paper/article/book/etc).
-- Set frontmatter `source_file:` to "{source_file_repo}".
-- {url_instruction}
-- Include a "## 原始出处" section after Summary with:
-  - 原始文件: [{source_file_repo}]({raw_relative_path}) — relative link to raw file
-  - 原文链接: [{{url}}]({{url}}) — original source URL (if available)
-{img_prompt_section}
-Return ONLY a valid JSON object with these fields (no markdown fences, no prose outside the JSON):
-{{
-  "title": "Human-readable title for this source",
-  "slug": "kebab-case-slug-for-filename",
-  "source_page": "full markdown content for wiki/sources/<slug>.md — use the source page format from the schema. CRITICAL: Aggressively convert key people, products, concepts and projects into [[Wikilinks]] inline in the text. Omitting [[ ]] for known terms is a failure.",
-  "index_entry": "- [Title](sources/slug.md) — one-line summary",
-  "overview_update": "full updated content for wiki/overview.md, or null if no update needed",
-  "entity_pages": [
-    {{"path": "entities/EntityName.md", "content": "full markdown content"}}
-  ],
-  "concept_pages": [
-    {{"path": "concepts/ConceptName.md", "content": "full markdown content"}}
-  ],
-  "contradictions": ["describe any contradiction with existing wiki content, or empty list"],
-  "log_entry": "## [{today}] ingest | <title>\\n\\nAdded source. Key claims: ..."
-}}
-"""
-
-    print(f"  calling API (model: ...)")
-    raw = call_llm(prompt, max_tokens=8192)
     try:
         data = parse_json_from_response(raw)
     except (ValueError, json.JSONDecodeError) as e:
@@ -922,6 +982,8 @@ if __name__ == "__main__":
         print("       python tools/ingest.py --validate-only")
         print("       python tools/ingest.py --from-digest [YYYY-MM-DD]  # ingest from digest brief")
         print("       python tools/ingest.py --no-convert  # skip auto-conversion of non-.md files")
+        print("       python tools/ingest.py --phase1  # write prompts to files for subagent processing")
+        print("       python tools/ingest.py --phase2  # read results from subagent processing")
         print(f"\nSupported formats: {', '.join(sorted(ALL_SUPPORTED_EXTENSIONS))}")
         sys.exit(1)
 

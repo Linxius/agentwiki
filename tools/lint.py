@@ -25,9 +25,7 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import date
 
-import os
-
-from _utils import read_file, extract_wikilinks
+from _utils import read_file, extract_wikilinks, call_llm, prepare_tasks, read_results, clean_task_dirs
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
@@ -37,20 +35,25 @@ LOG_FILE = WIKI_DIR / "log.md"
 SCHEMA_FILE = REPO_ROOT / "CLAUDE.md"
 
 
-def call_llm(prompt: str, model_env: str, default_model: str, max_tokens: int = 4096) -> str:
-    try:
-        from litellm import completion
-    except ImportError:
-        print("Error: litellm not installed. Run: pip install litellm")
-        sys.exit(1)
-        
-    model = os.getenv(model_env, default_model)
-    response = completion(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens
-    )
-    return response.choices[0].message.content
+def build_semantic_lint_prompt(pages_context: str, sample_size: int) -> str:
+    """Build the LLM prompt for semantic lint checks."""
+    return f"""You are linting an LLM Wiki. Review the pages below and identify:
+1. Contradictions between pages (claims that conflict)
+2. Stale content (summaries that newer sources have superseded)
+3. Data gaps (important questions the wiki can't answer — suggest specific sources to find)
+4. Concepts mentioned but lacking depth
+
+Wiki pages (sample of {sample_size} pages):
+{pages_context}
+
+Return a markdown lint report with these sections:
+## Contradictions
+## Stale Content
+## Data Gaps & Suggested Sources
+## Concepts Needing More Depth
+
+Be specific — name the exact pages and claims involved.
+"""
 
 
 def all_wiki_pages() -> list[Path]:
@@ -250,7 +253,38 @@ def check_isolated_communities(graph_data: dict) -> list[dict]:
     return results
 
 
-def run_lint():
+_LINT_TASK_ID = "semantic_lint"
+
+
+def _run_semantic_lint(pages_context: str, sample_size: int,
+                       phase: str | None = None) -> str:
+    """Run semantic lint check. Supports direct/phase1/phase2 modes."""
+    prompt = build_semantic_lint_prompt(pages_context, sample_size)
+
+    if phase == "phase1":
+        prepare_tasks([{
+            "id": _LINT_TASK_ID,
+            "prompt": prompt,
+            "max_tokens": 3000,
+            "metadata": {"type": "semantic_lint", "sample_size": sample_size},
+        }])
+        return ""
+
+    if phase == "phase2":
+        results_map = read_results()
+        raw = results_map.get(_LINT_TASK_ID, "")
+        clean_task_dirs()
+        if not raw:
+            print("  ⚠️  semantic lint: 无结果")
+            return "(semantic lint 未完成)"
+        return raw
+
+    # Default: direct LLM call
+    print("  running semantic lint via API...")
+    return call_llm(prompt, max_tokens=3000)
+
+
+def run_lint(phase: str | None = None):
     pages = all_wiki_pages()
     today = date.today().isoformat()
 
@@ -300,25 +334,7 @@ def run_lint():
         rel = p.relative_to(REPO_ROOT)
         pages_context += f"\n\n### {rel}\n{read_file(p)[:1500]}"  # truncate long pages
 
-    print("  running semantic lint via API...")
-    prompt = f"""You are linting an LLM Wiki. Review the pages below and identify:
-1. Contradictions between pages (claims that conflict)
-2. Stale content (summaries that newer sources have superseded)
-3. Data gaps (important questions the wiki can't answer — suggest specific sources to find)
-4. Concepts mentioned but lacking depth
-
-Wiki pages (sample of {len(sample)} pages):
-{pages_context}
-
-Return a markdown lint report with these sections:
-## Contradictions
-## Stale Content
-## Data Gaps & Suggested Sources
-## Concepts Needing More Depth
-
-Be specific — name the exact pages and claims involved.
-"""
-    semantic_report = call_llm(prompt, "LLM_MODEL", "claude-3-5-sonnet-latest", max_tokens=3000)
+    semantic_report = _run_semantic_lint(pages_context, len(sample), phase=phase)
 
     # Compose full report
     report_lines = [
@@ -434,9 +450,20 @@ def append_log(entry: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lint the LLM Wiki")
     parser.add_argument("--save", action="store_true", help="Save lint report to wiki/lint-report.md")
+    parser.add_argument("--phase1", action="store_true", help="Write prompts to files for subagent processing")
+    parser.add_argument("--phase2", action="store_true", help="Read results from subagent processing")
     args = parser.parse_args()
 
-    report = run_lint()
+    phase = None
+    if args.phase1:
+        phase = "phase1"
+    elif args.phase2:
+        phase = "phase2"
+
+    report = run_lint(phase=phase)
+
+    if phase == "phase1":
+        sys.exit(0)
 
     if args.save and report:
         report_path = WIKI_DIR / "lint-report.md"

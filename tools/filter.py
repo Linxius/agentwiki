@@ -34,7 +34,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import os
 
-from _utils import read_file, write_file, call_llm, inject_source_url
+from _utils import (read_file, write_file, call_llm, prepare_tasks, read_results,
+                     clean_task_dirs, TASK_DIR, RESULT_DIR), inject_source_url
 
 REPO_ROOT = Path(__file__).parent.parent
 INBOX_DIR = REPO_ROOT / "raw" / "inbox"
@@ -166,76 +167,39 @@ def extract_source_url(file_path: Path) -> str:
     return file_path.as_posix()
 
 
-def analyze_file(file_path: Path, interests_desc: str, disinterests_desc: str = "") -> list[dict]:
-    """Use LLM to analyze file. interests_desc/disinterests_desc precompiled from run_filter()."""
-    if not interests_desc.strip():
-        print("  Warning: No interests defined. Generating summary only.")
-
+def build_analyze_prompt(file_path: Path, interests_desc: str, disinterests_desc: str = "") -> str:
+    """Build the LLM prompt for analyzing a file."""
     preview = get_file_preview(file_path)
     source_url = extract_source_url(file_path)
 
-    # Detect if file might contain multiple items
     is_multientry = any(kw in preview.lower() for kw in [
         "arxiv", "paper", "list", "summary", "newsletter", "digest",
         "bulletin", "weekly", "daily", "top", "most", "recent",
     ])
+    entry_count_hint = "\nExtract EACH distinct item as a separate entry." if is_multientry else "\nReturn exactly ONE entry in the array."
 
-    if is_multientry:
-        entry_count_hint = "\nExtract EACH distinct item as a separate entry."
-    else:
-        entry_count_hint = "\nReturn exactly ONE entry in the array."
+    return f"""分析研究材料，返回JSON数组。
 
-    prompt = f"""You are an AI assistant analyzing research materials. Use concise Chinese.
+格式:
+[{{"title":"","title_cn":"","source_url":"","domain":"","keywords":[""],"match_level":"interested|possibly_interested|not_interested","matched_interests":[""],"reason":"","brief":"","detailed_report":"含4项:问题与背景/方法/效果/局限","suggested_category":"papers|articles|talks|books|docs|projects|datasets","suggested_new_interests":[],"suggested_new_disinterests":[]}}]{entry_count_hint}
 
-返回格式 (JSON array, 不要代码块):
-[
-    {{
-    "title": "document or item title",
-    "title_cn": "标题中文翻译",
-    "source_url": "url if available, else null",
-    "domain": "所属领域 (e.g. 计算机视觉/3D重建/NLP)",
-    "keywords": ["关键术语(中文)", "3-5个"],
-    "match_level": "interested | possibly_interested | not_interested",
-    "matched_interests": ["兴趣名称"],
-    "reason": "why it matches (1-2 sentences)",
-    "brief": "brief summary (if not_interested, keep to 1 sentence)",
-    "detailed_report": "300-500 word Chinese report (if not_interested, set to empty string)",
-    "suggested_category": "papers | articles | talks | books | docs | projects | datasets",
-    "suggested_new_interests": [{{"name": "...", "weight": 0.8, "keywords": ["..."], "description": "..."}}],
-    "suggested_new_disinterests": [{{"name": "...", "weight": 0.9, "keywords": ["..."], "description": "..."}}]
-  }}
-]{entry_count_hint}
+兴趣: {interests_desc or "无"}
+排除: {disinterests_desc or "无"}
 
-Current interests:
-{interests_desc if interests_desc else "No specific interests defined."}
-
-Exclusion list (if document matches any of these, MUST set match_level to "not_interested"):
-{disinterests_desc if disinterests_desc else "None defined."}
-
-Document ({file_path.name}):
-=== START ===
+文档({file_path.name}):
 {preview}
-=== END ===
 
-Return ONLY the JSON array. No markdown fences, no prose.
+返回JSON数组，不要代码块。"""
 
 如果「Current interests」为空，matched_interests 返回空数组 []。
 如果文档涉及的兴趣/排除项不在上方列表中，可建议新增到 suggested_new_interests / suggested_new_disinterests（可选）。"""
 
-    raw = None
-    data = None
-    try:
-        raw = call_llm(prompt, max_tokens=4096)
-        clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        clean = re.sub(r"\s*```$", "", clean.strip())
-        data = json.loads(clean)
-    except Exception as e:
-        print(f"  ⚠️  LLM failed for {file_path.name}: {e}")
-        if raw:
-            print(f"  Raw (first 300): {raw[:300]}")
 
-    if data is None:
-        raise RuntimeError(f"LLM analysis failed for {file_path.name}")
+def parse_analyze_response(raw: str, file_path: Path, source_url: str = "") -> list[dict]:
+    """Parse LLM response into structured results."""
+    clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    clean = re.sub(r"\s*```$", "", clean.strip())
+    data = json.loads(clean)
     if not isinstance(data, list):
         data = [data]
 
@@ -258,8 +222,23 @@ Return ONLY the JSON array. No markdown fences, no prose.
             "suggested_new_interests": entry.get("suggested_new_interests", []),
             "suggested_new_disinterests": entry.get("suggested_new_disinterests", []),
         })
-
     return results
+
+
+def analyze_file(file_path: Path, interests_desc: str, disinterests_desc: str = "") -> list[dict]:
+    """Use LLM to analyze file. Direct mode (calls LLM API)."""
+    if not interests_desc.strip():
+        print("  Warning: No interests defined. Generating summary only.")
+
+    prompt = build_analyze_prompt(file_path, interests_desc, disinterests_desc)
+    source_url = extract_source_url(file_path)
+
+    try:
+        raw = call_llm(prompt, max_tokens=4096)
+        return parse_analyze_response(raw, file_path, source_url)
+    except Exception as e:
+        print(f"  ⚠️  LLM failed for {file_path.name}: {e}")
+        raise RuntimeError(f"LLM analysis failed for {file_path.name}")
 
 
 def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
@@ -551,7 +530,7 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                     target += " " + head
                 except Exception:
                     pass
-                if any(kw in target for kw in disinterest_keywords_pre):
+                if any(re.search(r'\b' + re.escape(kw) + r'\b', target) for kw in disinterest_keywords_pre):
                     # Skip LLM entirely: create minimal result
                     serialized = [{
                         "file": rel,
@@ -579,18 +558,35 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
             pending = filtered_pending
 
     if pending:
-        print(f"\n需分析 {len(pending)} 个文件（并行 max_workers=2）:\n")
+        print(f"\n需分析 {len(pending)} 个文件:\n")
 
-        with ThreadPoolExecutor(max_workers=2) as exec:
-            future_map = {
-                exec.submit(analyze_file, fp, interests_desc, disinterests_desc): (fp, rel)
-                for fp, rel in pending
-            }
+        # ── Phase 1: write prompts to files for subagents ──
+        if "--phase1" in sys.argv:
+            tasks = []
+            for fp, rel in pending:
+                prompt = build_analyze_prompt(fp, interests_desc, disinterests_desc)
+                tasks.append({
+                    "id": rel.replace("/", "_").replace("\\", "_"),
+                    "prompt": prompt,
+                    "max_tokens": 4096,
+                    "metadata": {"file": rel, "title": fp.stem},
+                })
+            prepare_tasks(tasks)
+            return
 
-            for future in as_completed(future_map):
-                fp, rel = future_map[future]
+        # ── Phase 2: read results from subagents ──
+        if "--phase2" in sys.argv:
+            results_map = read_results()
+            print(f"📥 读取 {len(results_map)} 个结果")
+            for fp, rel in pending:
+                tid = rel.replace("/", "_").replace("\\", "_")
+                raw = results_map.get(tid, "")
+                if not raw:
+                    print(f"  ⚠️  {fp.name}: 无结果")
+                    failed_files.add(rel)
+                    continue
                 try:
-                    file_results = future.result()
+                    file_results = parse_analyze_response(raw, fp, extract_source_url(fp))
                     serialized = []
                     for r in file_results:
                         item = dict(r)
@@ -601,8 +597,33 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                     for r in file_results:
                         print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
                 except Exception as e:
-                    print(f"  ⚠️  {fp.name} failed: {e}")
+                    print(f"  ⚠️  {fp.name} parse failed: {e}")
                     failed_files.add(rel)
+            clean_task_dirs()
+        else:
+            # Normal mode: direct LLM calls
+            with ThreadPoolExecutor(max_workers=2) as exec:
+                future_map = {
+                    exec.submit(analyze_file, fp, interests_desc, disinterests_desc): (fp, rel)
+                    for fp, rel in pending
+                }
+
+                for future in as_completed(future_map):
+                    fp, rel = future_map[future]
+                    try:
+                        file_results = future.result()
+                        serialized = []
+                        for r in file_results:
+                            item = dict(r)
+                            item["file"] = rel
+                            serialized.append(item)
+                        cache[rel] = serialized
+                        save_filter_cache(cache)
+                        for r in file_results:
+                            print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
+                    except Exception as e:
+                        print(f"  ⚠️  {fp.name} failed: {e}")
+                        failed_files.add(rel)
     else:
         print(f"\n所有文件均已缓存（{skipped_from_cache} 个）。")
 
@@ -764,6 +785,8 @@ if __name__ == "__main__":
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
     parser.add_argument("--clear-cache", action="store_true", help="Clear checkpoint cache and re-analyze all files")
     parser.add_argument("--retry-failed", action="store_true", help="Re-process files listed in raw/.filter-failed.txt")
+    parser.add_argument("--phase1", action="store_true", help="Write prompts to files for subagent processing")
+    parser.add_argument("--phase2", action="store_true", help="Read results from subagent processing")
     args = parser.parse_args()
 
     if args.clear_cache:

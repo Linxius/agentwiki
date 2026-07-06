@@ -22,6 +22,7 @@ Describe what you want in plain English or use shorthand triggers:
 | `deep read` / `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
 | `合入 wiki` / `ingest from digest` | 将 digest 中勾选条目合入 wiki |
 | `ingest <file>` | 直接合入单个文件到 wiki |
+| `read paper <url>` / `阅读论文 <url>` / `深度阅读 <url>` | 直接阅读 arxiv/PDF/网页 → 生成深度阅读到 deepdive.md |
 | `read code` / `代码阅读` | 子代理驱动：收集代码 → 分析 → 生成 wiki 页面（见 Code Reading Workflow） |
 | `status` / `流程状态` | 检查各流程节点状态并建议下一步 |
 
@@ -134,6 +135,29 @@ Steps:
    - Comparison with related fields
    - Potential issues/limitations
 4. Save deep-dive reports to `raw/digest/YYYY-MM-DD/deepdive.md`
+
+### Stage 2b: Direct Read (skip inbox)
+
+Triggered by: *"read paper <url>"* or *"阅读论文 <url>"* or `python tools/deep-read.py --paper <url>`
+
+跳过 inbox 流程，直接对单篇论文/网页生成深度阅读报告。
+
+Steps:
+1. 检测输入类型：
+   - arxiv URL → 提取 arxiv_id，用 arxiv2md 转换
+   - PDF 路径 → 用 pdf2md.py 转换为 markdown
+   - 网页 URL → 用 requests + trafilatura 抓取
+2. 提取标题（从 markdown 首个 `#` 行）
+3. 提取并下载图片（用于 LLM 选择核心架构图）
+4. 调用 LLM 生成深度阅读报告（与 Stage 2 相同 prompt）
+5. 追加到 `raw/digest/YYYY-MM-DD/deepdive.md`
+
+用法：
+```bash
+python tools/deep-read.py --paper https://arxiv.org/abs/2401.12345
+python tools/deep-read.py --paper /path/to/paper.pdf
+python tools/deep-read.py --paper https://example.com/article
+```
 
 ### Stage 3: Ingest to Wiki
 
@@ -333,6 +357,57 @@ inbox.py 检测到 git URL 或本地路径时，输出 `[code] <link> — 待子
 1. 读 `raw/inbox/inbox.md` 找 type=git/local 的条目
 2. 对每个条目 spawn 子代理执行上述工作流
 3. 清理 inbox.md 中已处理的行
+
+---
+
+## Agent 编排：文件传输协议
+
+**核心原则**: LLM 调用由子代理完成，中间结果通过文件传输，主 agent 不读大文件。
+
+### 协议流程
+
+```
+脚本 --phase1 → 写 prompt 到 /tmp/wiki-tasks/
+agent → spawn 子代理读 prompt，写结果到 /tmp/wiki-results/
+脚本 --phase2 → 读结果，继续处理
+```
+
+### 支持的脚本
+
+| 脚本 | Phase 1 | Phase 2 |
+|------|---------|---------|
+| `filter.py` | 生成分析 prompt | 解析结果写 brief.md |
+| `deep-read.py` | 生成深度阅读 prompt | 解析结果写 deepdive.md |
+
+### 主 agent 调用示例
+
+```bash
+# Filter: 分析 inbox 文件
+python tools/filter.py --phase1
+# agent spawn 子代理处理 /tmp/wiki-tasks/*.json
+python tools/filter.py --phase2
+
+# Deep Read: 生成深度阅读
+python tools/deep-read.py --date 2024-01-15 --phase1
+# agent spawn 子代理处理 /tmp/wiki-tasks/*.json
+python tools/deep-read.py --date 2024-01-15 --phase2
+```
+
+### 子代理 prompt 模板
+
+子代理读取 `/tmp/wiki-tasks/<id>.json`，执行 prompt，将结果写入 `/tmp/wiki-results/<id>.txt`：
+
+```
+读取 /tmp/wiki-tasks/<id>.json 中的 prompt
+执行分析任务
+将结果写入 /tmp/wiki-results/<id>.txt
+```
+
+### 优势
+
+- Agent 上下文不膨胀：大文件内容不经过 agent
+- 脚本保持数据处理逻辑：prompt 模板、解析、输出格式都在脚本里
+- 子代理只做 LLM 推理：专注分析任务
 
 ---
 

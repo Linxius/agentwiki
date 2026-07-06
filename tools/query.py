@@ -10,6 +10,8 @@ Usage:
 Flags:
     --save              Save the answer back into the wiki (prompts for filename)
     --save <path>       Save to a specific wiki path
+    --phase1            Write prompts to files for subagent processing
+    --phase2            Read results from subagent processing
 """
 
 import sys
@@ -18,37 +20,14 @@ import json
 import argparse
 from pathlib import Path
 from datetime import date
-import os
 
-from _utils import read_file, write_file, call_llm
+from _utils import read_file, write_file, call_llm, prepare_tasks, read_results, clean_task_dirs
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
 INDEX_FILE = WIKI_DIR / "index.md"
 LOG_FILE = WIKI_DIR / "log.md"
 SCHEMA_FILE = REPO_ROOT / "CLAUDE.md"
-
-
-def write_file(path: Path, content: str):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    print(f"  saved: {path.relative_to(REPO_ROOT)}")
-
-
-def call_llm(prompt: str, model_env: str, default_model: str, max_tokens: int = 4096) -> str:
-    try:
-        from litellm import completion
-    except ImportError:
-        print("Error: litellm not installed. Run: pip install litellm")
-        sys.exit(1)
-        
-    model = os.getenv(model_env, default_model)
-    response = completion(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens
-    )
-    return response.choices[0].message.content
 
 
 def find_relevant_pages(question: str, index_content: str) -> list[Path]:
@@ -110,7 +89,26 @@ def append_log(entry: str):
     LOG_FILE.write_text(entry.strip() + "\n\n" + existing, encoding="utf-8")
 
 
-def query(question: str, save_path: str | None = None):
+def build_page_selection_prompt(question: str, index_content: str) -> str:
+    return f"Given this wiki index:\n\n{index_content}\n\nWhich pages are most relevant to answering: \"{question}\"\n\nReturn ONLY a JSON array of relative file paths (as listed in the index), e.g. [\"sources/foo.md\", \"concepts/Bar.md\"]. Maximum 10 pages."
+
+
+def build_synthesis_prompt(question: str, index_content: str, schema: str, pages_context: str) -> str:
+    return f"""You are querying an LLM Wiki to answer a question. Use the wiki pages below to synthesize a thorough answer. Cite sources using [[PageName]] wikilink syntax.
+
+Schema:
+{schema}
+
+Wiki pages:
+{pages_context}
+
+Question: {question}
+
+Write a well-structured markdown answer with headers, bullets, and [[wikilink]] citations. At the end, add a ## Sources section listing the pages you drew from.
+"""
+
+
+def query(question: str, save_path: str | None = None, phase1: bool = False, phase2: bool = False):
     today = date.today().isoformat()
 
     # Step 1: Read index
@@ -119,14 +117,119 @@ def query(question: str, save_path: str | None = None):
         print("Wiki is empty. Ingest some sources first with: python tools/ingest.py <source>")
         sys.exit(1)
 
-    # Step 2: Find relevant pages
+    # Step 2: Find relevant pages (always runs — keyword matching is fast)
     relevant_pages = find_relevant_pages(question, index_content)
 
+    needs_page_selection = not relevant_pages or len(relevant_pages) <= 1
+    schema = read_file(SCHEMA_FILE)
+    page_selection_prompt = None
+
+    if needs_page_selection:
+        page_selection_prompt = build_page_selection_prompt(question, index_content)
+
+    if phase1:
+        tasks = []
+        if page_selection_prompt:
+            tasks.append({
+                "id": "page_selection",
+                "prompt": page_selection_prompt,
+                "max_tokens": 512,
+                "metadata": {"type": "page_selection", "question": question},
+            })
+
+        # Build synthesis prompt with whatever pages we have
+        pages_context = ""
+        for p in relevant_pages:
+            rel = p.relative_to(REPO_ROOT)
+            pages_context += f"\n\n### {rel}\n{p.read_text(encoding='utf-8')}"
+        if not pages_context:
+            pages_context = f"\n\n### wiki/index.md\n{index_content}"
+
+        synthesis_prompt = build_synthesis_prompt(question, index_content, schema, pages_context)
+        tasks.append({
+            "id": "synthesis",
+            "prompt": synthesis_prompt,
+            "max_tokens": 4096,
+            "metadata": {"type": "synthesis", "question": question},
+        })
+
+        prepare_tasks(tasks)
+        return
+
+    if phase2:
+        results_map = read_results()
+
+        # Apply page selection result if needed
+        if needs_page_selection and "page_selection" in results_map:
+            raw = results_map["page_selection"].strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            try:
+                paths = json.loads(raw)
+                relevant_pages = [WIKI_DIR / p for p in paths if (WIKI_DIR / p).exists()]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Read page content and rebuild synthesis prompt
+        pages_context = ""
+        for p in relevant_pages:
+            rel = p.relative_to(REPO_ROOT)
+            pages_context += f"\n\n### {rel}\n{p.read_text(encoding='utf-8')}"
+        if not pages_context:
+            pages_context = f"\n\n### wiki/index.md\n{index_content}"
+
+        if "synthesis" in results_map:
+            answer = results_map["synthesis"]
+        else:
+            # Fallback: re-synthesize with context
+            prompt = build_synthesis_prompt(question, index_content, schema, pages_context)
+            answer = call_llm(prompt, max_tokens=4096)
+
+        print("\n" + "=" * 60)
+        print(answer)
+        print("=" * 60)
+
+        clean_task_dirs()
+
+        # Optionally save
+        if save_path is not None:
+            if save_path == "":
+                slug = input("\nSave as (slug, e.g. 'my-analysis'): ").strip()
+                if not slug:
+                    print("Skipping save.")
+                    return
+                save_path = f"syntheses/{slug}.md"
+
+            full_save_path = WIKI_DIR / save_path
+            frontmatter = f"""---
+title: "{question[:80]}"
+type: synthesis
+tags: []
+sources: []
+last_updated: {today}
+---
+
+"""
+            write_file(full_save_path, frontmatter + answer)
+
+            index_content = read_file(INDEX_FILE)
+            entry = f"- [{question[:60]}]({save_path}) — synthesis"
+            if "## Syntheses" in index_content:
+                index_content = index_content.replace("## Syntheses\n", f"## Syntheses\n{entry}\n")
+                INDEX_FILE.write_text(index_content, encoding="utf-8")
+            print(f"  indexed: {save_path}")
+
+        append_log(f"## [{today}] query | {question[:80]}\n\nSynthesized answer from {len(relevant_pages)} pages." +
+                   (f" Saved to {save_path}." if save_path else ""))
+        return
+
+    # ── Default mode: direct LLM calls ──
+
     # If no keyword match, ask Claude to identify relevant pages from the index
-    if not relevant_pages or len(relevant_pages) <= 1:
+    if needs_page_selection:
         print("  selecting relevant pages via API...")
-        prompt = f"Given this wiki index:\n\n{index_content}\n\nWhich pages are most relevant to answering: \"{question}\"\n\nReturn ONLY a JSON array of relative file paths (as listed in the index), e.g. [\"sources/foo.md\", \"concepts/Bar.md\"]. Maximum 10 pages."
-        raw = call_llm(prompt, "LLM_MODEL_FAST", "claude-3-5-haiku-latest", max_tokens=512)
+        prompt = build_page_selection_prompt(question, index_content)
+        raw = call_llm(prompt, max_tokens=512)
         raw = raw.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
@@ -145,23 +248,10 @@ def query(question: str, save_path: str | None = None):
     if not pages_context:
         pages_context = f"\n\n### wiki/index.md\n{index_content}"
 
-    schema = read_file(SCHEMA_FILE)
-
     # Step 4: Synthesize answer
     print(f"  synthesizing answer from {len(relevant_pages)} pages...")
-    prompt = f"""You are querying an LLM Wiki to answer a question. Use the wiki pages below to synthesize a thorough answer. Cite sources using [[PageName]] wikilink syntax.
-
-Schema:
-{schema}
-
-Wiki pages:
-{pages_context}
-
-Question: {question}
-
-Write a well-structured markdown answer with headers, bullets, and [[wikilink]] citations. At the end, add a ## Sources section listing the pages you drew from.
-"""
-    answer = call_llm(prompt, "LLM_MODEL", "claude-3-5-sonnet-latest", max_tokens=4096)
+    prompt = build_synthesis_prompt(question, index_content, schema, pages_context)
+    answer = call_llm(prompt, max_tokens=4096)
     print("\n" + "=" * 60)
     print(answer)
     print("=" * 60)
@@ -206,5 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("question", help="Question to ask the wiki")
     parser.add_argument("--save", nargs="?", const="", default=None,
                         help="Save answer to wiki (optionally specify path)")
+    parser.add_argument("--phase1", action="store_true", help="Write prompts to files for subagent processing")
+    parser.add_argument("--phase2", action="store_true", help="Read results from subagent processing")
     args = parser.parse_args()
-    query(args.question, args.save)
+    query(args.question, args.save, phase1=args.phase1, phase2=args.phase2)
