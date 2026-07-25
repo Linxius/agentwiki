@@ -57,13 +57,14 @@ def parse_interests(content: str) -> list[dict]:
     Format:
         ## 兴趣列表
         - 名称 [kw1, kw2, ...]
-        - 名称
 
         ## 排除列表
+        ### 方向/细分领域
         - 名称 [kw1, kw2, ...]
     """
     entries = []
     current_category = None
+    current_subcategory = None
     VALID_SECTIONS = {"兴趣列表", "排除列表"}
 
     for line in content.split("\n"):
@@ -74,6 +75,12 @@ def parse_interests(content: str) -> list[dict]:
         cat_match = re.match(r'^## (.+)$', line)
         if cat_match:
             current_category = cat_match.group(1).strip() if cat_match.group(1).strip() in VALID_SECTIONS else None
+            current_subcategory = None
+            continue
+
+        sub_match = re.match(r'^### (.+)$', line)
+        if sub_match and current_category:
+            current_subcategory = sub_match.group(1).strip()
             continue
 
         if current_category is None:
@@ -90,6 +97,7 @@ def parse_interests(content: str) -> list[dict]:
                 "keywords": [k.strip() for k in kw_str.split(",")] if kw_str else [],
                 "description": "",
                 "category": current_category or "未分类",
+                "subcategory": current_subcategory or "",
             })
 
     return entries
@@ -189,10 +197,16 @@ def build_analyze_prompt(file_path: Path, interests_desc: str, disinterests_desc
 文档({file_path.name}):
 {preview}
 
-返回JSON数组，不要代码块。"""
+返回JSON数组，不要代码块。
 
-如果「Current interests」为空，matched_interests 返回空数组 []。
-如果文档涉及的兴趣/排除项不在上方列表中，可建议新增到 suggested_new_interests / suggested_new_disinterests（可选）。"""
+匹配规则（必须严格遵守）:
+- 只标记 interested 当文档核心主题与兴趣条目直接对应。关键词只是辅助，不能仅凭关键词出现就判定感兴趣
+- possibly_interested 要求文档至少30%内容与兴趣条目相关，而非仅提及
+- 宁可漏判不可误判：拿不准时标记 not_interested
+- 不要发散猜测：不要因为标题/摘要提到了兴趣领域的上位概念就标记感兴趣（如兴趣是"3D高斯泼溅"，不要因为文档提到"3D视觉"就标记）
+- 匹配理由必须具体：写明"文档的XXX部分直接讨论了XXX兴趣条目"，而非"文档涉及相关领域"
+- 如果「兴趣」为空，matched_interests 返回空数组 []
+- 如果文档涉及的兴趣/排除项不在上方列表中，可建议新增到 suggested_new_interests / suggested_new_disinterests（可选）"""
 
 
 def parse_analyze_response(raw: str, file_path: Path, source_url: str = "") -> list[dict]:
@@ -498,7 +512,9 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     disinterests_desc = ""
     for d in disinterests:
         kw_str = ", ".join(d.get("keywords", []))
-        disinterests_desc += f"- {d['name']}:\n  - 关键词: [{kw_str}]\n  - 描述: {d.get('description', '')}\n"
+        subcat = d.get("subcategory", "")
+        subcat_prefix = f"[{subcat}] " if subcat else ""
+        disinterests_desc += f"- {subcat_prefix}{d['name']}:\n  - 关键词: [{kw_str}]\n  - 描述: {d.get('description', '')}\n"
 
     # Collect files that need analysis
     pending = []

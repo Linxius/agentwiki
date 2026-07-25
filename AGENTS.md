@@ -5,8 +5,44 @@
 
 This wiki is maintained entirely by your coding agent. No API key needed — just open this repo in Claude Code, OpenCode, or any agent that reads this file, and talk to it. For script-based ingest: `python tools/ingest.py <file>` (requires `litellm` + LLM API).
 
+## alphaXiv MCP
+
+本项目通过 [alphaXiv MCP Server](https://www.alphaxiv.org/docs/mcp) 接入学术论文检索能力，作为 inbox 流程的补充。配置见 `docs/setup.md`。
+
+可用工具：
+
+| 工具 | 用途 | 在 wiki 中的应用 |
+|------|------|------------------|
+| `discover_papers` | 关键词+语义搜索论文 | 按主题发现相关文献 |
+| `answer_pdf_queries` | 按问题提取论文特定页面 | 精准提取论文中的方法/数据 |
+| `read_files_from_github_repository` | 读取论文关联的 GitHub 代码 | 代码走读流程的前置步骤 |
+| `list_library` / `save_papers_to_folder` | 文献库管理 | 跟踪已读/待读论文 |
+
+**注意：** alphaXiv MCP 工具在 agent 可用工具列表中显示为 `alphaxiv_*` 前缀。仅在 agent 已配置 MCP 时可用，非强制依赖。
+
+### ⚠️ 论文全文获取方式
+
+**不要使用 `get_paper_content` 获取全文。** 该工具返回的全文会被工具层 50KB 输出限制截断，导致内容不完整。
+
+**正确流程（arXiv 论文）：**
+1. **全文转换**：`arxiv2md <arxiv_id> -o output.md`（解析 arxiv HTML，保留公式/结构，图片以 URL 形式内嵌）
+2. **精准查询**：用 `answer_pdf_queries` 针对具体问题提取论文特定页面
+
+安装：`pip install git+https://github.com/timf34/arxiv2md.git`
+
+示例：
+```bash
+# 转换论文为 markdown（含图片 URL）
+arxiv2md 2512.14180 -o raw/inbox/2026-07-26/spherical-voronoi.md
+
+# 精准查询（MCP 工具）
+answer_pdf_queries paper="2512.14180" queries=["What are the main contributions?"]
+```
+
 ## ⚠️ PDF Handling Rule
-**NEVER use the Read tool on `.pdf` files.** Opencode's Read tool does not support PDFs — it will raise an error. Always run `python tools/pdf2md.py <file.pdf>` first, then use `ingest` on the generated `.md` file.
+**NEVER use the Read tool on `.pdf` files.** Opencode's Read tool does not support PDFs — it will raise an error. Always run `python tools/pdf2md.py <file.pdf>` first, then use `ingest` on the generated `.md` file。
+
+**注意：** arXiv 论文不要用 `pdf2md.py`，而是用 `arxiv2md`（解析 HTML，保留公式/结构更完整）。`pdf2md.py` 仅用于非 arXiv 的本地 PDF 文件。
 
 ## How to Use
 
@@ -18,13 +54,19 @@ Describe what you want in plain English or use shorthand triggers:
 |---|---|
 | `feeds` / `拉取 feeds` | 从配置的源拉取新内容到 inbox/ |
 | `inbox` / `处理 inbox` | 解析 inbox.md 链接 → 生成 .md 到 inbox/ |
+| `import bookmarks` / `导入书签` | 从 Edge 书签指定目录导入链接到 inbox.md |
+| `dedup inbox` / `去重 inbox` | 按 arxiv ID 去重 inbox.md，关联 pdf/GitHub/项目页 |
+| `archive bookmarks` / `归档书签` | 将 Edge Wiki/Inbox 书签移入 Wiki/Inbox Archive |
+| `书签流程` / `bookmark pipeline` | 一条命令完成：导入 → 去重 → 归档 |
 | `filter` / `开始筛选` | 筛选 inbox/ → 生成 digest/brief.md |
 | `deep read` / `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
 | `合入 wiki` / `ingest from digest` | 将 digest 中勾选条目合入 wiki |
 | `ingest <file>` | 直接合入单个文件到 wiki |
-| `read paper <url>` / `阅读论文 <url>` / `深度阅读 <url>` | 直接阅读 arxiv/PDF/网页 → 生成深度阅读到 deepdive.md |
+| `read paper <url>` / `阅读论文 <url>` / `深度阅读 <url>` | 直接阅读 arxiv/PDF/网页 → 生成深度阅读到 deepdive.md（arXiv 用 arxiv2md，PDF 用 pdf2md.py） |
 | `read code` / `代码阅读` | 子代理驱动：收集代码 → 分析 → 生成 wiki 页面（见 Code Reading Workflow） |
+| `search papers <query>` / `搜索论文` | 使用 alphaXiv MCP 搜索论文并添加到 inbox |
 | `status` / `流程状态` | 检查各流程节点状态并建议下一步 |
+| `fetch sources` / `抓取源文件` | 自动抓取 brief.md 中缺失/空的源文件 |
 
 ### Maintenance Triggers
 
@@ -41,6 +83,7 @@ Describe what you want in plain English or use shorthand triggers:
 | 触发词 | 动作 |
 |---|---|
 | `query: <question>` | 基于 wiki 内容回答（`python tools/query.py`） |
+| `read paper <arxiv_id>` | `arxiv2md <id> -o output.md` + LLM 深度阅读 |
 | *plain question* | 描述需求，如 "ingest this file: raw/papers/...md" |
 
 ### Agent Proactive Reminders
@@ -52,6 +95,7 @@ The agent should proactively detect and remind with trigger words:
 - **Pending ingest**: "brief.md 有 `[x] 合入 wiki` 但未处理（触发词: ingest from digest）"
 - **Feeds stale**: "feeds 已 N 天未拉取（触发词: feeds）"
 - **After filter completes**: "筛选完成！请阅读 brief.md 确认"
+- **Source files missing**: "brief.md 有 N 个源文件为空/缺失（触发词: fetch sources）"
 
 ### Status Auto-Detect
 
@@ -80,6 +124,7 @@ templates/    generic.md paper.md article.md book.md dataset.md doc.md project.m
 tools/        inbox.py health.py lint.py build_graph.py filter.py deep-read.py
               download-images.py ingest.py status.py validate-wiki.py
               heal.py refresh.py query.py file_to_md.py pdf2md.py code-read.py
+              fetch-sources.py
 ```
 
 ## Link Inbox → Filter → Deep Read → Ingest Workflow
@@ -103,7 +148,7 @@ Triggered by: *"filter"* or `python tools/filter.py`
 
 Steps:
 1. Scan `raw/inbox/` for files
-2. Read `wiki/interests.md`（含 `## 兴趣列表` 和 `## 排除列表` 两个分区）
+2. Read `wiki/interests.md`（含 `## 兴趣列表` 和 `## 排除列表` 两个分区；排除列表按 `### 方向/细分领域/技术` 分层组织）
 3. Use LLM to analyze each file:
    - Generate brief summary (3-5 sentences)
    - Generate detailed report (500-800 words in Chinese)
@@ -118,6 +163,22 @@ Steps:
 6. Archive current brief.md to `raw/digest/brief/YYYY-MM-DD.md`
 7. Clear inbox/   → 用户阅读 `brief.md`，勾选 `[x] 深度阅读`、`[x] 合入 wiki` 或 `[x] 不感兴趣` 确定下一步
    - 控制台会汇总 LLM 建议的新增兴趣/排除项供参考
+
+#### ⚠️ 兴趣匹配规则（保守原则）
+
+- **只标记 `interested` 当文档核心主题与兴趣条目直接对应**。关键词只是辅助，不能仅凭关键词出现就判定感兴趣
+- **`possibly_interested` 要求：** 文档至少 30% 内容与兴趣条目相关，而非仅提及
+- **宁可漏判不可误判**：拿不准时标记 `not_interested`，让用户在 brief 中手动发现
+- **不要发散猜测**：不要因为标题/摘要提到了兴趣领域的上位概念就标记感兴趣（如兴趣是"3D高斯泼溅"，不要因为文档提到"3D视觉"就标记）
+- **匹配理由必须具体**：写明"文档的 XXX 部分直接讨论了 XXX 兴趣条目"，而非"文档涉及相关领域"
+
+#### ⚠️ brief.md 源文件自动抓取
+
+当 brief.md 中条目的源文件路径对应文件为空（0 字节）或不存在时，自动从 `source_url` 重新抓取内容：
+- arxiv URL → `arxiv2md <arxiv_id> -o <path>`
+- 网页 URL → `webfetch` + trafilatura 提取
+- PDF → `python tools/pdf2md.py <url> -o <path>`
+- 抓取后更新 brief.md 中对应条目的源文件路径
 
 ### Stage 2: Deep Read
 
@@ -137,6 +198,8 @@ Steps:
    - Potential issues/limitations
 4. Save deep-dive reports to `raw/digest/YYYY-MM-DD/deepdive.md`
 
+> **注意：** Stage 2 和 Stage 3 可独立触发。brief.md 中 `[x] 合入 wiki` 不需要先 `[x] 深度阅读`，可直接进入 Stage 3。
+
 ### Stage 2b: Direct Read (skip inbox)
 
 Triggered by: *"read paper <url>"* or *"阅读论文 <url>"* or `python tools/deep-read.py --paper <url>`
@@ -145,13 +208,12 @@ Triggered by: *"read paper <url>"* or *"阅读论文 <url>"* or `python tools/de
 
 Steps:
 1. 检测输入类型：
-   - arxiv URL → 提取 arxiv_id，用 arxiv2md 转换
-   - PDF 路径 → 用 pdf2md.py 转换为 markdown
-   - 网页 URL → 用 requests + trafilatura 抓取
+   - arxiv URL → 提取 arxiv_id，用 `arxiv2md <arxiv_id> -o output.md` 转换（解析 HTML，保留公式/结构，图片以 URL 内嵌）
+   - PDF 路径 → 用 `python tools/pdf2md.py <path>` 转换为 markdown
+   - 网页 URL → 用 `webfetch` 抓取 HTML，再用 trafilatura 提取正文
 2. 提取标题（从 markdown 首个 `#` 行）
-3. 提取并下载图片（用于 LLM 选择核心架构图）
-4. 调用 LLM 生成深度阅读报告（与 Stage 2 相同 prompt）
-5. 追加到 `raw/digest/YYYY-MM-DD/deepdive.md`
+3. 调用 LLM 生成深度阅读报告（与 Stage 2 相同 prompt）
+4. 追加到 `raw/digest/YYYY-MM-DD/deepdive.md`
 
 用法：
 ```bash
@@ -163,6 +225,8 @@ python tools/deep-read.py --paper https://example.com/article
 ### Stage 3: Ingest to Wiki
 
 Triggered by: *"ingest from digest"* or `python tools/ingest.py --from-digest YYYY-MM-DD`
+
+可直接对 brief.md 中勾选了 `[x] 合入 wiki` 的条目执行，无需先深度阅读。
 
 Steps:
 1. Read brief.md to find entries marked `[x] 合入 wiki`

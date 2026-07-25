@@ -6,6 +6,7 @@ Usage:
     python tools/inbox.py                    # process links + convert local files
     python tools/inbox.py --list             # show links in inbox.md without processing
     python tools/inbox.py --list-local       # show local files in inbox/ without converting
+    python tools/inbox.py --dedup            # deduplicate by arxiv ID and rewrite inbox.md
     python tools/inbox.py --no-scan          # only process links, skip local files
     python tools/inbox.py --process-only     # only process, skip inbox.md cleanup
 
@@ -45,6 +46,7 @@ INBOX_MD = INBOX_DIR / "inbox.md"
 ARXIV_PATTERNS = [
     re.compile(r"arxiv\.org/abs/(\d{4}\.\d{4,5})(v\d+)?"),
     re.compile(r"arxiv\.org/pdf/(\d{4}\.\d{4,5})(v\d+)?"),
+    re.compile(r"alphaxiv\.org/abs/(\d{4}\.\d{4,5})"),
     re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?$"),
 ]
 
@@ -61,29 +63,46 @@ GIT_URL_PATTERN = re.compile(
 # ─── Inbox.md parsing ───────────────────────────────────────────────
 
 def read_inbox_md() -> list[dict]:
-    """Parse inbox.md, return list of {'link': url, 'type': 'url'|'arxiv', ...}."""
+    """Parse inbox.md, return list of {'link': url, 'type': 'url'|'arxiv', ...}.
+
+    Deduplicates by arxiv ID: multiple URLs for the same paper (abs/pdf/GitHub/project page)
+    are merged into one entry with related_urls.
+    """
     if not INBOX_MD.exists():
         return []
 
     content = INBOX_MD.read_text(encoding="utf-8")
-    items = []
+    raw_items = []
 
     for line in content.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("<!--") or line.startswith("---"):
             continue
 
-        # URL pattern
+        # Try markdown link format: - [text](url)
+        md_match = re.match(r'^\s*[-*]\s*\[.+?\]\((https?://[^)]+)\)', line)
+        if md_match:
+            url = md_match.group(1).rstrip('`).,')
+            arxiv_id = extract_arxiv_id(url)
+            if arxiv_id:
+                raw_items.append({"link": url, "type": "arxiv", "arxiv_id": arxiv_id, "raw": line})
+            elif is_git_url(url):
+                raw_items.append({"link": url, "type": "git", "raw": line})
+            elif is_url(url):
+                raw_items.append({"link": url, "type": "url", "raw": line})
+            continue
+
+        # Bare URL pattern: - https://...
         url_match = re.match(r'^\s*[-*]\s*(https?://\S+)', line)
         if url_match:
             url = url_match.group(1).rstrip('`).,')
             arxiv_id = extract_arxiv_id(url)
             if arxiv_id:
-                items.append({"link": url, "type": "arxiv", "raw": line})
+                raw_items.append({"link": url, "type": "arxiv", "arxiv_id": arxiv_id, "raw": line})
             elif is_git_url(url):
-                items.append({"link": url, "type": "git", "raw": line})
+                raw_items.append({"link": url, "type": "git", "raw": line})
             elif is_url(url):
-                items.append({"link": url, "type": "url", "raw": line})
+                raw_items.append({"link": url, "type": "url", "raw": line})
             continue
 
         # git SSH pattern
@@ -91,13 +110,13 @@ def read_inbox_md() -> list[dict]:
         if git_match:
             url = git_match.group(1).rstrip('`).,')
             if is_git_url(url):
-                items.append({"link": url, "type": "git", "raw": line})
+                raw_items.append({"link": url, "type": "git", "raw": line})
                 continue
 
         # arXiv ID pattern
         arx = extract_arxiv_id(line)
         if arx:
-            items.append({"link": line, "type": "arxiv", "raw": line})
+            raw_items.append({"link": line, "type": "arxiv", "arxiv_id": arx, "raw": line})
             continue
 
         # local path pattern
@@ -106,9 +125,237 @@ def read_inbox_md() -> list[dict]:
             raw_path = line.lstrip("-* ").strip()
             normalized = normalize_local_path(raw_path)
             if normalized:
-                items.append({"link": str(normalized), "type": "local", "raw": line})
+                raw_items.append({"link": str(normalized), "type": "local", "raw": line})
 
+    # ── Deduplicate by arxiv ID ──
+    # Group all arxiv-related URLs by paper ID.
+    # Non-arxiv URLs (GitHub, project page) within 3 positions of an arxiv entry
+    # are treated as related if no other arxiv entry is closer.
+    items = _dedup_by_arxiv_id(raw_items)
     return items
+
+
+def _dedup_by_arxiv_id(raw_items: list[dict]) -> list[dict]:
+    """Group arxiv-related URLs by paper ID, associate nearby/related GitHub/project links.
+
+    Two-pass matching:
+      1. Position proximity (±5) + arxiv ID in text
+      2. Title keyword matching for distant but clearly related links
+    """
+    if not raw_items:
+        return []
+
+    # Collect all arxiv IDs and their positions
+    arxiv_positions = {}  # arxiv_id → list of indices
+    for i, item in enumerate(raw_items):
+        aid = item.get("arxiv_id")
+        if aid:
+            arxiv_positions.setdefault(aid, []).append(i)
+
+    if not arxiv_positions:
+        return raw_items
+
+    # Build paper titles from arxiv entries (for keyword matching)
+    paper_titles = {}  # arxiv_id → title text
+    for arxiv_id, positions in arxiv_positions.items():
+        for idx in positions:
+            raw = raw_items[idx].get("raw", "")
+            # Extract title from markdown link: [title](url) or just the text
+            title_match = re.search(r'\[(.+?)\]\(', raw)
+            if title_match:
+                paper_titles[arxiv_id] = title_match.group(1)
+                break
+            else:
+                paper_titles[arxiv_id] = raw
+
+    seen_indices = set()
+    result = []
+
+    for arxiv_id, positions in arxiv_positions.items():
+        group = [raw_items[i] for i in positions]
+
+        # Prefer abs link as primary
+        primary = None
+        for item in group:
+            if "/abs/" in item["link"]:
+                primary = item
+                break
+        if not primary:
+            primary = group[0]
+
+        related_urls = []
+        for item in group:
+            if item is not primary:
+                related_urls.append({"url": item["link"], "type": _classify_url(item["link"])})
+
+        primary_idx = raw_items.index(primary)
+        title = paper_titles.get(arxiv_id, "")
+
+        # Pass 1: position proximity (±5) + arxiv ID match
+        for offset in range(-5, 6):
+            idx = primary_idx + offset
+            if idx < 0 or idx >= len(raw_items) or idx in seen_indices:
+                continue
+            neighbor = raw_items[idx]
+            if neighbor.get("arxiv_id") == arxiv_id:
+                continue
+            if neighbor["type"] in ("git", "url") and not neighbor.get("arxiv_id"):
+                raw_text = neighbor.get("raw", "").lower()
+                # Match by arxiv ID in text
+                if arxiv_id.replace(".", "") in raw_text.replace(".", ""):
+                    related_urls.append({"url": neighbor["link"], "type": _classify_url(neighbor["link"])})
+                    seen_indices.add(idx)
+                    continue
+                # Match by title keywords in repo name or bookmark text
+                if title and _title_matches_text(title, neighbor.get("raw", "")):
+                    related_urls.append({"url": neighbor["link"], "type": _classify_url(neighbor["link"])})
+                    seen_indices.add(idx)
+
+        # Mark group indices as seen
+        for pos in positions:
+            seen_indices.add(pos)
+
+        entry = dict(primary)
+        entry["related_urls"] = related_urls
+        entry["arxiv_id"] = arxiv_id
+        result.append(entry)
+
+    # Pass 2: unmatched GitHub/project URLs — try matching by title to nearest arxiv paper
+    for i, item in enumerate(raw_items):
+        if i in seen_indices:
+            continue
+        if item["type"] not in ("git", "url") or item.get("arxiv_id"):
+            continue
+        # Find best matching arxiv paper by title keywords
+        best_match = _find_best_arxiv_match(item, raw_items, arxiv_positions, paper_titles, seen_indices)
+        if best_match:
+            # Add to that paper's related_urls
+            for entry in result:
+                if entry.get("arxiv_id") == best_match:
+                    entry["related_urls"].append({"url": item["link"], "type": _classify_url(item["link"])})
+                    seen_indices.add(i)
+                    break
+
+    # Add remaining non-arxiv, non-seen items
+    for i, item in enumerate(raw_items):
+        if i not in seen_indices:
+            result.append(item)
+
+    return result
+
+
+# Common words to ignore when matching titles
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "for", "of", "and", "or", "in", "on", "with", "to",
+    "from", "by", "as", "at", "is", "are", "was", "were", "be", "been",
+    "using", "via", "through", "towards", "based", "learn",
+})
+
+# Generic CS/3DGS terms that appear in many papers — not useful for disambiguation
+_GENERIC_WORDS = frozenset({
+    "gaussian", "splatting", "3d", "2d", "neural", "rendering", "reconstruction",
+    "mesh", "surface", "quality", "efficient", "high", "real", "time", "realtime",
+    "deep", "learning", "network", "model", "method", "approach", "framework",
+    "view", "image", "radiance", "field", "volume", "volumetric", "graphics",
+    "scene", "object", "objects", "view", "views", "novel", "synthesis", "generation",
+    "representation", "geometry", "texture", "material", "lighting", "relighting",
+    "inverse", "differentiable", "optimization", "training", "pipeline", "system",
+})
+
+
+def _extract_keywords(text: str, distinctive_only: bool = False) -> set[str]:
+    """Extract significant keywords from a title/text.
+
+    Preserves hyphenated terms (Ref-DGS, 3DGS, NeRF) as single tokens.
+    Handles markdown link format [text](url) by extracting the link text.
+    """
+    # Extract link text from markdown links: [text](url) → text
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    text = re.sub(r'\|.*$', '', text)
+    text = re.sub(r'https?://\S+', '', text)
+    words = set()
+    # Split on whitespace and common separators, but NOT hyphens
+    for w in re.split(r'[\s/:_.,:;!?()\'"]+', text):
+        w = w.lower().strip().strip('-')
+        if len(w) >= 3 and w not in _STOP_WORDS:
+            words.add(w)
+    if distinctive_only:
+        words -= _GENERIC_WORDS
+    return words
+
+
+def _title_matches_text(paper_title: str, text: str) -> bool:
+    """Check if a paper title has keyword overlap with a bookmark text/repo name.
+
+    Uses distinctive keywords (filtering generic CS terms) to avoid false positives.
+    Requires 2+ matching keywords, OR 1 compound term that looks like a paper-specific
+    abbreviation (e.g. ref-dgs, 3dgs, nerf).
+    """
+    title_kw = _extract_keywords(paper_title, distinctive_only=True)
+    text_kw = _extract_keywords(text, distinctive_only=True)
+    if not title_kw or not text_kw:
+        return False
+    matches = title_kw & text_kw
+    if len(matches) >= 2:
+        return True
+    # Single match: only accept if it's a short compound abbreviation (4-8 chars with hyphen)
+    # e.g. "ref-dgs", "3dgs", "nerf" — NOT "high-fidelity", "surfaces"
+    if len(matches) == 1:
+        w = next(iter(matches))
+        return "-" in w and 4 <= len(w) <= 8
+    return False
+
+
+def _find_best_arxiv_match(item: dict, raw_items: list[dict],
+                           arxiv_positions: dict, paper_titles: dict,
+                           seen_indices: set) -> str | None:
+    """Find the best arxiv paper match for an unmatched GitHub/project URL.
+
+    Uses distinctive keywords only (filters generic CS/3DGS terms) to avoid
+    false positives between different papers in the same field.
+    """
+    item_text = item.get("raw", "")
+    item_kw = _extract_keywords(item_text, distinctive_only=True)
+    if not item_kw:
+        return None
+
+    best_id = None
+    best_score = 0
+
+    for arxiv_id, positions in arxiv_positions.items():
+        title = paper_titles.get(arxiv_id, "")
+        title_kw = _extract_keywords(title, distinctive_only=True)
+        if not title_kw:
+            continue
+        overlap = title_kw & item_kw
+        score = len(overlap)
+        if score > best_score:
+            best_score = score
+            best_id = arxiv_id
+
+    # Require 2+ keywords, or 1 short compound abbreviation (4-8 chars with hyphen)
+    if best_score >= 2:
+        return best_id
+    if best_score == 1 and best_id:
+        title_kw = _extract_keywords(paper_titles.get(best_id, ""), distinctive_only=True)
+        item_kw_check = _extract_keywords(item_text, distinctive_only=True)
+        overlap = title_kw & item_kw_check
+        if any("-" in w and 4 <= len(w) <= 8 for w in overlap):
+            return best_id
+    return None
+
+
+def _classify_url(url: str) -> str:
+    """Classify a URL into a human-readable type label."""
+    if "github.com" in url or "gitlab.com" in url:
+        return "code"
+    if "arxiv.org" in url or "alphaxiv.org" in url:
+        if "/pdf/" in url:
+            return "pdf"
+        return "abs"
+    if any(kw in url.lower() for kw in ["project", "page", "homepage", ".io", ".dev"]):
+        return "project"
+    return "web"
 
 
 def extract_arxiv_id(text: str) -> str | None:
@@ -211,16 +458,50 @@ def page_to_markdown(url: str) -> str:
 
 # ─── arXiv conversion ───────────────────────────────────────────────
 
-def fetch_arxiv(arxiv_id: str) -> str:
-    """Use arxiv2md to convert an arXiv paper."""
+def fetch_arxiv(arxiv_id: str, out_path: Path | None = None) -> str:
+    """Use arxiv2md (Linxius) to convert an arXiv paper.
+
+    If out_path is given, writes output there (CLI mode, handles figures).
+    Otherwise returns content string (Python API mode, no figures).
+    """
+    if out_path:
+        # CLI mode: Linxius version outputs to a directory
+        out_dir = out_path.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "arxiv2md", arxiv_id,
+                 "--frontmatter", "--remove-toc",
+                 "-o", str(out_dir)],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                # Linxius outputs to <dir>/<paper-title>.md — find it
+                md_files = list(out_dir.glob("*.md"))
+                if md_files:
+                    generated = md_files[0]
+                    content = generated.read_text(encoding="utf-8")
+                    # Rename to our expected filename
+                    if generated != out_path:
+                        generated.rename(out_path)
+                    return content
+        except Exception:
+            pass
+        # Fallback to Python API if CLI fails
+        return _fetch_arxiv_api(arxiv_id)
+
+    return _fetch_arxiv_api(arxiv_id)
+
+
+def _fetch_arxiv_api(arxiv_id: str) -> str:
+    """Fallback: use arxiv2md Python API (no figure handling)."""
     try:
         from arxiv2md import ingest_paper_sync
-        result = ingest_paper_sync(arxiv_id)
+        result = ingest_paper_sync(arxiv_id, include_frontmatter=True)
         return result.content
     except ImportError:
         pass
     finally:
-        # Clean up arxiv2md cache
         cache_dir = REPO_ROOT / ".arxiv2md_cache"
         if cache_dir.exists():
             shutil.rmtree(cache_dir, ignore_errors=True)
@@ -235,8 +516,6 @@ def fetch_arxiv(arxiv_id: str) -> str:
             result = subprocess.run(
                 [sys.executable, str(pdf2md_script), arxiv_id, "-o", str(tmp)],
                 capture_output=True, text=True, timeout=120,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                encoding='utf-8'
             )
             if result.returncode == 0 and tmp.exists():
                 return tmp.read_text(encoding="utf-8")
@@ -246,7 +525,7 @@ def fetch_arxiv(arxiv_id: str) -> str:
             if tmp.exists():
                 tmp.unlink()
 
-    return f"# arXiv: {arxiv_id}\n\n[arxiv2md not installed — try: pip install arxiv2markdown]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}"
+    return f"# arXiv: {arxiv_id}\n\n[arxiv2md not installed — try: pip install git+https://github.com/timf34/arxiv2md.git]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}"
 
 
 # ─── Slug generation ────────────────────────────────────────────────
@@ -442,6 +721,54 @@ def scan_and_convert_local_files() -> list[str]:
 
 # ─── Main ───────────────────────────────────────────────────────────
 
+def _download_image(url: str, dest_dir: Path) -> str | None:
+    """Download image from URL to dest_dir. Return filename or None on failure."""
+    try:
+        resp = requests.get(url, timeout=30, stream=True)
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    # Derive filename from URL
+    url_path = url.split("?")[0].rstrip("/")
+    filename = os.path.basename(url_path)
+    if not filename or "." not in filename:
+        import uuid
+        filename = f"img-{uuid.uuid4().hex[:8]}.png"
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / filename
+    dest.write_bytes(resp.content)
+    return filename
+
+
+def _fix_image_paths(md_path: Path, md_dir: Path):
+    """Post-process arxiv2md output: download images to figures/ and update paths.
+
+    Linxius version outputs: ![Refer to caption](https://arxiv.org/.../figures/x.png)
+    This downloads images locally and updates paths to: ![Refer to caption](figures/x.png)
+    """
+    if not md_path.exists():
+        return
+    content = md_path.read_text(encoding="utf-8")
+    original = content
+
+    def _download_and_replace(m):
+        alt = m.group(1)
+        url = m.group(2)
+        if not url.startswith("http"):
+            return m.group(0)  # already local, skip
+        filename = _download_image(url, md_dir / "figures")
+        if filename:
+            return f"![{alt}](figures/{filename})"
+        return m.group(0)
+
+    # Match ![alt](url) with http URLs
+    content = re.sub(r'!\[([^\]]*)\]\((https?://[^)]+)\)', _download_and_replace, content)
+
+    if content != original:
+        md_path.write_text(content, encoding="utf-8")
+
 def process_link(item: dict, out_dir: Path) -> str:
     """Process a single link and save to out_dir. Return saved file path."""
     item_type = item["type"]
@@ -457,8 +784,27 @@ def process_link(item: dict, out_dir: Path) -> str:
         return process_code(item, out_dir)
     elif item_type == "arxiv":
         print(f"  [arXiv] {link}")
-        content = fetch_arxiv(link)
-        suffix = ".md"
+        arxiv_id = extract_arxiv_id(link) or link
+        # Output to subdirectory: file_dir/arxiv-{id}/paper.md + figures/
+        arxiv_dir = file_dir / f"arxiv-{arxiv_id.replace('.', '')}"
+        arxiv_dir.mkdir(parents=True, exist_ok=True)
+        out_file = arxiv_dir / f"{slug}.md"
+        content = fetch_arxiv(arxiv_id, out_path=out_file)
+        # Add related_urls to frontmatter
+        related = item.get("related_urls", [])
+        if related:
+            related_lines = "\n".join(f"  - {r['url']}  # {r['type']}" for r in related)
+            related_block = f"related_urls:\n{related_lines}\n"
+            if content.startswith("---"):
+                end = content.find("---", 3)
+                if end != -1:
+                    content = content[:end] + related_block + content[end:]
+            else:
+                content = f"---\n{related_block}---\n{content}"
+            out_file.write_text(content, encoding="utf-8")
+        # Update image paths in content to point to figures/ subfolder
+        _fix_image_paths(out_file, arxiv_dir)
+        return out_file
     else:
         print(f"  [web] {link}")
         content = page_to_markdown(link)
@@ -513,10 +859,58 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
     return saved
 
 
+def dedup_inbox_md():
+    """Deduplicate inbox.md by arxiv ID and rewrite the file.
+
+    Groups related URLs (pdf, GitHub, project page) under the primary arxiv entry.
+    Standalone items (non-arxiv, unmatched) remain as-is.
+    """
+    if not INBOX_MD.exists():
+        print("inbox.md 不存在。")
+        return
+
+    items = read_inbox_md()
+    if not items:
+        print("inbox.md 为空。")
+        return
+
+    before = len(INBOX_MD.read_text(encoding="utf-8").strip().splitlines()) - 1  # minus header
+    lines = ["# Inbox", ""]
+
+    for item in items:
+        related = item.get("related_urls", [])
+        link = item["link"]
+
+        # Build the main line
+        raw = item.get("raw", "")
+        # Try to preserve the original markdown link text
+        md_match = re.search(r'\[(.+?)\]\(', raw)
+        title = md_match.group(1) if md_match else link
+        lines.append(f"- [{title}]({link})")
+
+        # Add related URLs as indented sub-items
+        if related:
+            parts = []
+            for r in related:
+                rtype = r["type"]
+                rurl = r["url"]
+                parts.append(f"[{rtype}]({rurl})")
+            lines.append(f"  - related: {', '.join(parts)}")
+
+    lines.append("")
+    content = "\n".join(lines)
+    INBOX_MD.write_text(content, encoding="utf-8")
+
+    after = len(items)
+    print(f"✅ inbox.md 已去重: {before} 行 → {after} 条独立条目")
+    print(f"   文件: {INBOX_MD.relative_to(REPO_ROOT)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Process inbox.md links + convert local files in inbox/")
     parser.add_argument("--list", action="store_true", help="List links without processing")
     parser.add_argument("--list-local", action="store_true", help="List local files in inbox/ without converting")
+    parser.add_argument("--dedup", action="store_true", help="Deduplicate inbox.md by arxiv ID and rewrite file")
     parser.add_argument("--process-only", action="store_true", help="Only process links, skip inbox.md cleanup")
     parser.add_argument("--no-scan", action="store_true", help="Skip local file scanning")
     args = parser.parse_args()
@@ -526,7 +920,12 @@ def main():
         type_labels = {"arxiv": "arXiv", "url": "web", "git": "git", "local": "local"}
         for i, item in enumerate(items, 1):
             label = type_labels.get(item["type"], item["type"])
-            print(f"{i}. [{label}] {item['link']}")
+            related = item.get("related_urls", [])
+            related_str = ""
+            if related:
+                types = [r["type"] for r in related]
+                related_str = f"  +{len(related)} related ({', '.join(types)})"
+            print(f"{i}. [{label}] {item['link']}{related_str}")
         return
 
     if args.list_local:
@@ -543,6 +942,10 @@ def main():
                 print(f"  {f}")
         else:
             print("No local files found in inbox/")
+        return
+
+    if args.dedup:
+        dedup_inbox_md()
         return
 
     process_inbox(process_only=args.process_only, no_scan=args.no_scan)
