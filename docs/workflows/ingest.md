@@ -2,10 +2,11 @@
 
 Triggered by: *"ingest <file>"*
 
-**Supported formats:** Markdown (`.md`) is ingested directly. Non-markdown files (`.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) are auto-converted to markdown via [markitdown](https://github.com/microsoft/markitdown) before ingestion. PDF files, arXiv IDs, or arXiv URLs are processed via `tools/pdf2md.py`. Use `--no-convert` to skip auto-conversion.
+**Supported formats:** Markdown (`.md`) is ingested directly. Non-markdown files (`.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) are auto-converted to markdown via [markitdown](https://github.com/microsoft/markitdown) before ingestion. **arXiv 论文优先用 `arxiv2md`（解析 HTML，保留公式和结构）**，PDF 文件用 `tools/pdf2md.py`。Use `--no-convert` to skip auto-conversion.
 
 Steps (in order):
-1. **PDF** — `tools/pdf2md.py <path>` (timeout ≥600s). Read `.md` output.
+1. **arXiv 论文** — `arxiv2md <arxiv_id> -o <output.md>`（推荐，解析 HTML 版本，保留 MathML/公式）。若失败则 fallback 到 `tools/pdf2md.py`。
+2. **PDF** — `tools/pdf2md.py <path>` (timeout ≥600s). Read `.md` output.
 2. **Book splitting** — dir: use chapter files. Single file: split by `##` into `raw/books/<slug>/*.md`.
 3. Extract original URL from frontmatter/arXiv ID/content — if none, ask user.
 4. Read `wiki/index.md` + `wiki/overview.md` for context.

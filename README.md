@@ -30,6 +30,8 @@ raw/
 
 **Requires:** [Claude Code](https://claude.ai/code), [Codex](https://openai.com/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [MiMoCode](https://github.com/xiaomi/mimocode), [OpenCode](https://github.com/opencode-ai/opencode), or any agent that reads a config file.
 
+**可选：[alphaXiv MCP](https://www.alphaxiv.org/docs/mcp)** — 论文搜索、阅读、文献库管理。配置见 `docs/setup.md`。
+
 ```bash
 git clone https://github.com/SamurAIGPT/llm-wiki-agent.git
 cd llm-wiki-agent
@@ -56,6 +58,7 @@ ingest slides.pptx notes.docx              # batch, mixed formats
 query: what are the main themes?           # synthesize answer from wiki pages
 lint                                       # find orphans, contradictions, gaps
 build graph                                # build graph.html from all wikilinks
+搜索论文: LLM agent tool use                # alphaXiv MCP 搜索（需配置 MCP）
 ```
 
 Plain English works too:
@@ -312,6 +315,17 @@ python tools/file_to_md.py --input_dir raw/imports/ --delete_source  # remove or
 - Query answers are shown first — the agent then asks if you want to file them as synthesis pages. Your explorations compound just like ingested sources
 - The wiki is a git repo — version history for free
 - Standalone Python scripts in `tools/` work without a coding agent (require `ANTHROPIC_API_KEY`)
+
+## alphaXiv MCP（可选）
+
+通过 [alphaXiv MCP Server](https://www.alphaxiv.org/docs/mcp) 接入学术论文检索能力：
+
+- **搜索论文** — `搜索论文: <query>` 按关键词发现相关文献，自动添加到 inbox
+- **阅读论文** — `阅读论文 <url>` 直接获取论文全文或 AI 摘要
+- **代码走读** — 读取论文关联的 GitHub 代码仓库
+- **文献库管理** — 跟踪已读/待读论文
+
+配置简单，一个 API key 即可。详见 `docs/setup.md`。
 
 ## Tech Stack
 

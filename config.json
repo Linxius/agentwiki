@@ -2,12 +2,6 @@
   "output_language": "zh-CN",
   "output_language_name": "Chinese (Simplified)",
   "description": "All wiki output should be written in the language specified above.",
-  "llm": {
-    "provider": "openai",
-    "api_base": "http://localhost:12127/v1",
-    "model": "Qwen3.5-9B-Q4_K_M.gguf"
-    // "model": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-  },
   "feeds": {
     "sources": [
       {
@@ -18,10 +12,5 @@
         "enabled": true
       }
     ]
-  },
-  "llm": {
-    "model": "openai/Qwen3.5-9B-Q4_K_M.gguf",
-    "api_base": "http://localhost:12127/v1",
-    "api_key": "fake-key"
   }
 }
