@@ -40,40 +40,12 @@ def _load_config():
 
 
 def call_llm(prompt, max_tokens=8192):
-    try:
-        from litellm import completion
-    except ImportError:
-        print("Error: litellm not installed. Run: pip install litellm")
-        sys.exit(1)
-
-    config = _load_config()
-    llm_config = config.get("llm", {})
-
-    # 环境变量优先，其次 config.json，最后 fallback
-    model = os.getenv("LLM_MODEL", llm_config.get("model", "claude-3-5-sonnet-latest"))
-    provider = os.getenv("LLM_PROVIDER", llm_config.get("provider", "openai"))
-    api_base = os.getenv("OPENAI_API_BASE", llm_config.get("api_base"))
-    api_key = os.getenv("OPENAI_API_KEY", llm_config.get("api_key", "fake-key"))
-
-    # 使用 provider/model 格式
-    if provider:
-        model = f"{provider}/{model}"
-
-    kwargs = {"model": model, "messages": [{"role": "user", "content": prompt}]}
-    if api_base:
-        kwargs["api_base"] = api_base
-    if api_key:
-        kwargs["api_key"] = api_key
-    if max_tokens:
-        kwargs["max_tokens"] = max_tokens
-    # Disable thinking for local models that support it (Qwen3.x)
-    kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
-
-    response = completion(**kwargs)
-    content = response.choices[0].message.content
-    if not content or not content.strip():
-        raise ValueError("LLM returned empty response")
-    return content
+    """直接 LLM 调用已弃用。请使用 --phase1/--phase2 工作流：脚本写 prompt 到文件，agent spawn 子代理处理。"""
+    print("Error: 直接 LLM 调用已弃用。请使用 --phase1/--phase2 工作流。")
+    print("  python tools/<script>.py --phase1  # 生成 prompt 文件")
+    print("  # agent spawn 子代理处理 /tmp/wiki-tasks/*.json")
+    print("  python tools/<script>.py --phase2  # 读取结果继续处理")
+    sys.exit(1)
 
 
 def parse_json_from_response(text):

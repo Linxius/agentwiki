@@ -3,7 +3,7 @@
 ## Output Language
 `config.json` specifies `"output_language": "zh-CN"`. All wiki output must be written in Simplified Chinese.
 
-This wiki is maintained entirely by your coding agent. No API key needed — just open this repo in Claude Code, OpenCode, or any agent that reads this file, and talk to it. For script-based ingest: `python tools/ingest.py <file>` (requires `litellm` + LLM API).
+This wiki is maintained entirely by your coding agent. No API key needed — just open this repo in Claude Code, OpenCode, or any agent that reads this file, and talk to it. For script-based ingest: use `--phase1/--phase2` workflow (agent spawns subagents for LLM calls).
 
 ## alphaXiv MCP
 
@@ -61,7 +61,7 @@ Describe what you want in plain English or use shorthand triggers:
 | `filter` / `开始筛选` | 筛选 inbox/ → 生成 digest/brief.md |
 | `deep read` / `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
 | `合入 wiki` / `ingest from digest` | 将 digest 中勾选条目合入 wiki |
-| `ingest <file>` | 直接合入单个文件到 wiki |
+| `ingest <file>` / `合入 <file>` | 直接合入单个文件到 wiki |
 | `read paper <url>` / `阅读论文 <url>` / `深度阅读 <url>` | 直接阅读 arxiv/PDF/网页 → 生成深度阅读到 deepdive.md（arXiv 用 arxiv2md，PDF 用 pdf2md.py） |
 | `read code` / `代码阅读` | 子代理驱动：收集代码 → 分析 → 生成 wiki 页面（见 Code Reading Workflow） |
 | `search papers <query>` / `搜索论文` | 使用 alphaXiv MCP 搜索论文并添加到 inbox |
@@ -236,21 +236,62 @@ Steps:
 5. Run ingest() for each file (follows existing Ingest Workflow)
 6. Update brief.md status
 
+#### ⚠️ 模板遵从规则
+
+**Ingest 必须严格遵循 `templates/` 中对应类型的模板。** 模板定义了：
+- Frontmatter 字段（title, type, tags, date, source_file, url, venue, published, links）
+- 正文章节顺序和内容要求
+- 图片引用格式：`![描述](../images/<source-slug>/文件名)` 或直接使用 arxiv URL
+
+**Paper 模板特殊要求：**
+- Method 章节最前面放框架图/流程图/管线图（用 arxiv HTML URL 链接，如 `https://arxiv.org/html/.../figures/images/...`）
+- 包含 Related Work Analysis 章节
+- Method 章节双重写作：整体思路（直白解释设计动机）+ 复现细节（公式、超参数）
+
 ---
 
 ## Page Format
 
-Every wiki page uses this frontmatter:
+**所有 wiki 页面必须遵循 `templates/` 目录中的对应模板。**
+
+可用模板：`paper.md`、`article.md`、`book.md`、`dataset.md`、`doc.md`、`project.md`、`talk.md`、`generic.md`
+
+### Paper 模板结构
 
 ```yaml
 ---
-title: "Page Title"
-type: source | entity | concept | synthesis
-tags: []
-sources: []       # list of source slugs that inform this page
-last_updated: YYYY-MM-DD
+title: "Paper Title"
+type: source
+tags: [paper]
+date: YYYY-MM-DD
+source_file: raw/papers/...
+url: ""
+venue: ""
+published: YYYY
+links: []
 ---
 ```
+
+```
+## Summary
+## 原始出处
+## Key Contributions
+## Method
+  - 整体思路（直白语言解释设计动机）
+  - 各组件/步骤（直觉 + 复现细节）
+  - 框架图放在本节最前面
+## Training
+## Results & Comparisons
+## Related Work Analysis
+## Ablations
+## Limitations
+## Connections
+## Contradictions
+```
+
+**Method 章节双重写作要求**：
+1. **整体思路**：用直白语言解释"为什么这样做"和"每个步骤在干什么"
+2. **复现细节**：给出可复现的技术细节（公式、超参数、数据流等）
 
 Use `[[PageName]]` wikilinks to link to other wiki pages.
 
@@ -493,6 +534,8 @@ python tools/deep-read.py --date 2024-01-15 --phase2
 Triggered by: *"ingest <file>"*
 
 详细步骤见 [`docs/workflows/ingest.md`](docs/workflows/ingest.md)（含 Concept Distinction + Source-Type Templates）。
+
+**Ingest 必须严格遵循 `templates/` 中对应类型的模板。**
 
 ---
 

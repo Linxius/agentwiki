@@ -110,5 +110,4 @@ agent 应调用 `alphaxiv_discover_papers` 返回论文列表。
 | [markitdown](https://github.com/microsoft/markitdown) | `pip install markitdown` | 非 .md 文件自动转换 |
 | [arxiv2md](https://github.com/Linxius/arxiv2md) | `pip install git+https://github.com/Linxius/arxiv2md.git` | arXiv 论文→Markdown（解析 HTML，保留公式，下载图片） |
 | [Marker](https://github.com/VikParuchuri/marker) | `pip install marker-pdf` | 复杂学术 PDF |
-| [litellm](https://github.com/BerriAI/litellm) | `pip install litellm` | 脚本中的 LLM 调用 |
 | [trafilatura](https://github.com/adbar/trafilatura) | `pip install trafilatura` | 网页内容提取 |

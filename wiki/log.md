@@ -1,21 +1,16 @@
-## [2026-06-27] code-read | AMD FidelityFX Super Resolution (FSR 1.0)
-
-## [2026-06-27] code-read | Snapdragon Game Super Resolution (SGSR)
-
-## [2026-06-15] filter | 2 files processed (1 excluded)
-
-## [2026-06-15] filter | 86 files processed (40 excluded) (5 failed)
-
-## [2026-06-15] filter | 46 files processed
-
-## [2026-06-15] filter | 91 files processed
-
 # Wiki Log
 
-Append-only chronological record of all operations.
+## [2026-07-26] ingest | Volumetric Surfaces
+- Source: https://arxiv.org/abs/2409.02482
+- Category: papers
+- Tags: view-synthesis, real-time-rendering, mesh-representation, fuzzy-geometry, mobile-rendering
 
-Format: `## [YYYY-MM-DD] <operation> | <title>`
+## [2026-07-26] ingest | Adaptive Shells
+- Source: https://arxiv.org/abs/2311.10091
+- Category: papers
+- Tags: NeRF, volume-rendering, implicit-surface, adaptive-sampling, real-time-rendering
 
-Parse recent entries: `grep "^## \[" wiki/log.md | tail -10`
-
----
+## [2026-07-26] ingest | Extracting Neural Materials from Multi-view Images
+- Source: https://arxiv.org/abs/2606.26715
+- Category: papers
+- Tags: neural-materials, inverse-rendering, differentiable-rendering, material-extraction

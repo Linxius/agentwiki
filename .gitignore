@@ -23,6 +23,10 @@ raw/daily/
 wiki/lint-report.md
 wiki/health-report.md
 wiki/archived/
+wiki/.ingest_tmp_imgs/
+
+# === 缓存 ===
+.arxiv2md_cache/
 
 # === 自动生成的图谱数据 ===
 graph/graph.json

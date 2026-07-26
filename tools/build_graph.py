@@ -67,25 +67,10 @@ EDGE_COLORS = {
 
 
 def call_llm(prompt: str, model_env: str, default_model: str, max_tokens: int = 4096) -> str:
-    try:
-        from litellm import completion
-    except ImportError:
-        print("Error: litellm not installed. Run: pip install litellm")
-        import sys
-        sys.exit(1)
-
-    model = os.getenv(model_env, default_model)
-
-    kwargs = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-
-    if max_tokens:
-        kwargs["max_tokens"] = max_tokens
-
-    response = completion(**kwargs)
-    return response.choices[0].message.content
+    """直接 LLM 调用已弃用。请使用 --phase1/--phase2 工作流。"""
+    print("Error: 直接 LLM 调用已弃用。请使用 --phase1/--phase2 工作流。")
+    import sys
+    sys.exit(1)
 
 
 def sha256(text: str) -> str:

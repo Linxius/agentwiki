@@ -802,8 +802,7 @@ def process_link(item: dict, out_dir: Path) -> str:
             else:
                 content = f"---\n{related_block}---\n{content}"
             out_file.write_text(content, encoding="utf-8")
-        # Update image paths in content to point to figures/ subfolder
-        _fix_image_paths(out_file, arxiv_dir)
+
         return out_file
     else:
         print(f"  [web] {link}")
