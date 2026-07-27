@@ -66,6 +66,11 @@
 
 ## P2 — 效率/质量改进
 
+### [ ] Token 消耗全局优化（详见 [token-optimization-plan.md](token-optimization-plan.md)）
+- **AGENTS.md 瘦身**: 8,407 → ~4,500 tokens（外部化 code-read 子代理模板至 `docs/workflows/code-read.md`、合并 trigger 表格、精简 workflow 步骤）
+- **Pipeline 运行时**: ingest.py 兴趣提取 / query.py 综合回答不再内联 AGENTS.md 全文，每调用省 ~67 KB
+- **SCHEMA_FILE 统一**: build_graph.py / lint.py 修正指向不存在的 CLAUDE.md
+
 ### [ ] 子代理 prompt 过大导致超时/失败
 - **问题**：单个子代理处理多篇论文时，prompt 含全部论文内容（每篇 ~20KB），导致上下文超限或超时
 - **触发场景**：`batch subagent` 或一次性 spawn 5 篇 deep-read
@@ -139,3 +144,4 @@
 | 统一 filter.py 归档日期 | `fix filter archive date` |
 | 检查子代理同步机制 | `fix subagent sync` |
 | 重命名源文件为论文名 | `rename sources` |
+| 执行 Token 优化方案 | `token optimize` |
