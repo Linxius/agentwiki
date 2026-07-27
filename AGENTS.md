@@ -97,6 +97,27 @@ The agent should proactively detect and remind with trigger words:
 - **After filter completes**: "筛选完成！请阅读 brief.md 确认"
 - **Source files missing**: "brief.md 有 N 个源文件为空/缺失（触发词: fetch sources）"
 
+### ⚡ Workflow Optimizations (Agent Proactive)
+
+Agent **必须** 在每次操作后自觉评估并提出流程优化建议，目标：简单、自动、省 token。
+
+**触发时机：**
+- 重复执行相同模式 2 次以上 → 建议脚本化
+- 子代理数量过多（>5） → 建议批量合并
+- 同一份内容被反复读取 → 建议缓存/复用
+- 步骤可简化 → 建议合并或跳过
+
+**Token 节省原则：**
+| 策略 | 说明 |
+|------|------|
+| **批量子代理** | N 个文件不要 N 个子代理，按 10-15 个一批合并，共享 prompt 模版 |
+| **紧凑预览** | filter 预览用 2500 chars 替代 8000，只取 abstract + title |
+| **复用深度阅读** | 合入 wiki 时如有深度阅读报告，直接使用而非重读原文 |
+| **脚本化重复步骤** | 3 次以上的手工作业立即写脚本固化 |
+| **去重优先** | LLM 调用前先做低成本去重（arxiv ID 去重、关键词预过滤） |
+
+**提示方式：** 在每次任务完成后用 1-2 句话指出可优化的点，如"这 20 个文件可以分 2 批子代理而非单个处理，节省约 60% token"。
+
 ### Status Auto-Detect
 
 Run `python tools/status.py` — checks pipeline state and suggests next step.
@@ -105,7 +126,15 @@ Run `python tools/status.py` — checks pipeline state and suggests next step.
 
 ## Status Flow
 
-`待处理` → `已深度阅读` → `已合入/已跳过`
+`inbox.md 链接` → `inbox 处理（inbox/）` → `filter 筛选` → `brief 待确认` → `深度阅读 / 合入 wiki` → `已合入/已跳过`
+
+检查点：每次用 `python tools/status.py` 检查当前所在阶段以及建议的下一步。`status.py` 会依次检查：
+
+1. **inbox.md 链接数** — 是否有未处理的链接
+2. **inbox/ 待筛选文件** — 是否有已转换但未筛选的文件
+3. **brief 状态** — 简报是否已生成，是否有已勾选的条目
+4. **深度阅读 / 合入数量** — brief 中 `[x]` 勾选情况
+5. **feeds 状态** — 各源上次拉取时间
 
 ---
 
@@ -117,6 +146,7 @@ raw/          inbox/  inbox.md
                digest/  brief.md  YYYY-MM-DD/{deepdive-*/,}  sources/YYYY-MM-DD/  brief/
               filter/ papers/ articles/ talks/ books/ projects/ docs/ datasets/
               codes/  git clone 的代码仓库（按需创建）
+              .tmp/  ingest pipeline 中间产物（子代理临时脚本、暂存文件等），项目内路径确保子代理无权限问题
 wiki/         index.md log.md overview.md issues.md interests.md
               sources/ entities/ concepts/ syntheses/
 graph/        graph.json graph.html
@@ -146,23 +176,27 @@ Steps:
 
 Triggered by: *"filter"* or `python tools/filter.py`
 
+**推荐工作流（批量子代理 + --build-brief）：**
+
 Steps:
 1. Scan `raw/inbox/` for files
 2. Read `wiki/interests.md`（含 `## 兴趣列表` 和 `## 排除列表` 两个分区；排除列表按 `### 方向/细分领域/技术` 分层组织）
-3. Use LLM to analyze each file:
-   - Generate brief summary (3-5 sentences)
-   - Generate detailed report (500-800 words in Chinese)
-   - Match against interests: `interested` / `possibly_interested` / `not_interested`
-   - Match against exclusion list: 命中则强制 `not_interested`
-   - Suggest category (papers/articles/talks/books/docs/projects/datasets)
-   - Optionally suggest new interests/disinterests via `suggested_new_interests` / `suggested_new_disinterests`
-4. Generate `raw/digest/brief.md` with entries sorted by match level
-   - Each entry includes: title, source URL, matched interests, brief (3-5 sentences), detailed report (500-800 words), checkboxes for [ ] 深度阅读、[ ] 合入 wiki、[ ] 不感兴趣
-   - Entries grouped by match level: `[感兴趣]` → `[可能感兴趣]`（`[不感兴趣]` 不写入 brief）
-5. Move processed files to `raw/digest/YYYY-MM-DD/sources/`
-6. Archive current brief.md to `raw/digest/brief/YYYY-MM-DD.md`
-7. Clear inbox/   → 用户阅读 `brief.md`，勾选 `[x] 深度阅读`、`[x] 合入 wiki` 或 `[x] 不感兴趣` 确定下一步
-   - 控制台会汇总 LLM 建议的新增兴趣/排除项供参考
+3. Main agent 读取所有文件紧凑预览（只取 title + abstract，~2500 chars 每文件）
+4. 按 10-15 个文件一批，spawn 子代理并行分析。**不要每个文件一个子代理。**
+   - 每个子代理共享 prompt 模版（兴趣列表、匹配规则）
+   - 子代理返回 JSON 数组，包含 `brief`、`detailed_report`、`match_level` 等
+   - **必须提供 `figure_url` 和中文 `figure_caption`**（框架图URL和中文说明）
+5. 收集所有结果到 `results.json`
+6. 运行 `python tools/filter.py --build-brief results.json`
+   - 自动从源文件提取框架图URL和完整描述
+   - 自动生成中文 alt text 的 `![描述](url)` 图片标签
+   - 归档旧 brief → `raw/digest/brief/YYYY-MM-DD.md`
+   - 生成新 `raw/digest/brief.md`
+   - 移动源文件到 `raw/digest/sources/YYYY-MM-DD/`
+   - 清空 `raw/inbox/`
+7. 控制台汇总 LLM 建议的新增兴趣/排除项供参考
+
+**旧工作流（废弃）：** `--phase1/--phase2` 文件传输协议。不再使用。
 
 #### ⚠️ 兴趣匹配规则（保守原则）
 
@@ -228,13 +262,16 @@ Triggered by: *"ingest from digest"* or `python tools/ingest.py --from-digest YY
 
 可直接对 brief.md 中勾选了 `[x] 合入 wiki` 的条目执行，无需先深度阅读。
 
+**Token 节省：** 如有深度阅读报告（deepdive.md），直接使用其中内容生成 wiki 页面，**不要重读原文**。深度阅读已包含方法分析、结果解读、局限等全部信息。仅当深度阅读缺少关键细节时才按需读对应章节。
+
 Steps:
 1. Read brief.md to find entries marked `[x] 合入 wiki`
 2. Find corresponding files in `digest/YYYY-MM-DD/sources/`
-3. Show list to user for category confirmation
-4. Move files to appropriate category directory (raw/{papers,articles,...}/)
-5. Run ingest() for each file (follows existing Ingest Workflow)
-6. Update brief.md status
+3. If deep-read report exists for this entry, use it as primary content source
+4. Show list to user for category confirmation
+5. Move files to appropriate category directory (raw/{papers,articles,...}/)
+6. Run ingest() for each file (follows existing Ingest Workflow)
+7. Update brief.md status
 
 #### ⚠️ 模板遵从规则
 
@@ -478,57 +515,6 @@ inbox.py 检测到 git URL 或本地路径时，输出 `[code] <link> — 待子
 
 ---
 
-## Agent 编排：文件传输协议
-
-**核心原则**: LLM 调用由子代理完成，中间结果通过文件传输，主 agent 不读大文件。
-
-### 协议流程
-
-```
-脚本 --phase1 → 写 prompt 到 /tmp/wiki-tasks/
-agent → spawn 子代理读 prompt，写结果到 /tmp/wiki-results/
-脚本 --phase2 → 读结果，继续处理
-```
-
-### 支持的脚本
-
-| 脚本 | Phase 1 | Phase 2 |
-|------|---------|---------|
-| `filter.py` | 生成分析 prompt | 解析结果写 brief.md |
-| `deep-read.py` | 生成深度阅读 prompt | 解析结果写 deepdive.md |
-
-### 主 agent 调用示例
-
-```bash
-# Filter: 分析 inbox 文件
-python tools/filter.py --phase1
-# agent spawn 子代理处理 /tmp/wiki-tasks/*.json
-python tools/filter.py --phase2
-
-# Deep Read: 生成深度阅读
-python tools/deep-read.py --date 2024-01-15 --phase1
-# agent spawn 子代理处理 /tmp/wiki-tasks/*.json
-python tools/deep-read.py --date 2024-01-15 --phase2
-```
-
-### 子代理 prompt 模板
-
-子代理读取 `/tmp/wiki-tasks/<id>.json`，执行 prompt，将结果写入 `/tmp/wiki-results/<id>.txt`：
-
-```
-读取 /tmp/wiki-tasks/<id>.json 中的 prompt
-执行分析任务
-将结果写入 /tmp/wiki-results/<id>.txt
-```
-
-### 优势
-
-- Agent 上下文不膨胀：大文件内容不经过 agent
-- 脚本保持数据处理逻辑：prompt 模板、解析、输出格式都在脚本里
-- 子代理只做 LLM 推理：专注分析任务
-
----
-
 ## Ingest Workflow
 
 Triggered by: *"ingest <file>"*
@@ -588,6 +574,7 @@ Checks (auto-fix, no confirmation needed):
 - Empty/stub files (auto-delete)
 - Index sync (auto-sync stale/missing entries)
 - Log coverage (auto-append missing ingest entries)
+- Overview sync (auto-regenerate `wiki/overview.md` from `wiki/index.md`)
 
 Use `--save` for `wiki/health-report.md`.
 

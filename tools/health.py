@@ -17,6 +17,7 @@ Checks:
   - Empty / stub files (pages with no real content beyond frontmatter)
   - Index sync (wiki/index.md entries vs actual files on disk)
   - Log coverage (source pages without a corresponding log entry)
+  - Overview sync (wiki/overview.md vs wiki/index.md — auto-fixed)
 
 Design boundary (see AGENTS.md):
   health.py = structural integrity, deterministic, run every session
@@ -27,6 +28,7 @@ import re
 import sys
 import json
 import argparse
+import subprocess
 from pathlib import Path
 from datetime import date
 
@@ -36,6 +38,7 @@ REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
 INDEX_FILE = WIKI_DIR / "index.md"
 LOG_FILE = WIKI_DIR / "log.md"
+OVERVIEW_FILE = WIKI_DIR / "overview.md"
 
 # Minimum content length (excluding frontmatter) to not be considered a stub
 STUB_THRESHOLD_CHARS = 100
@@ -175,6 +178,41 @@ def check_log_coverage(pages: list[Path]) -> list[dict]:
     return missing
 
 
+# ── Check: Overview sync ──────────────────────────────────────────
+
+SYNC_SCRIPT = REPO_ROOT / "tools" / "sync-overview.py"
+
+
+def check_overview_sync() -> dict:
+    """Check if overview.md is in sync with index.md. Auto-fixes if out of sync.
+
+    Returns:
+        {"status": "synced"|"fixed"|"skipped", "reason": "..."}
+    """
+    if not SYNC_SCRIPT.exists():
+        return {"status": "skipped", "reason": "sync-overview.py not found"}
+
+    # Check first
+    check = subprocess.run(
+        [sys.executable, str(SYNC_SCRIPT), "--check"],
+        capture_output=True, text=True, timeout=30,
+    )
+
+    if check.returncode == 0:
+        return {"status": "synced", "reason": ""}
+
+    # Auto-fix
+    fix = subprocess.run(
+        [sys.executable, str(SYNC_SCRIPT), "--write"],
+        capture_output=True, text=True, timeout=30,
+    )
+
+    if fix.returncode == 0:
+        return {"status": "fixed", "reason": fix.stdout.strip()}
+    else:
+        return {"status": "skipped", "reason": f"auto-fix failed: {fix.stderr.strip()}"}
+
+
 # ── Report Generation ───────────────────────────────────────────────
 
 def run_health() -> dict:
@@ -187,6 +225,7 @@ def run_health() -> dict:
         "empty_files": check_empty_files(pages),
         "index_sync": check_index_sync(pages),
         "log_coverage": check_log_coverage(pages),
+        "overview_sync": check_overview_sync(),
     }
 
 
@@ -237,6 +276,20 @@ def format_report(results: dict) -> str:
     if not stale and not missing:
         lines.append("index.md is in sync with disk. ✅")
         lines.append("")
+
+    # ── Overview Sync
+    ov = results["overview_sync"]
+    lines.append(f"## Overview Sync")
+    lines.append("")
+    if ov["status"] == "synced":
+        lines.append("overview.md is in sync with index.md. ✅")
+    elif ov["status"] == "fixed":
+        lines.append(f"🛠️  overview.md 已自动修复（与 index.md 不同步）")
+        for rl in ov["reason"].split("\n"):
+            lines.append(f"  > {rl}")
+    else:
+        lines.append(f"⏭️  {ov['reason']}")
+    lines.append("")
 
     # ── Log Coverage
     log_missing = results["log_coverage"]

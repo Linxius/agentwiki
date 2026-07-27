@@ -36,10 +36,17 @@ PIPELINE_STEPS = [
 
 
 def check_inbox_links():
-    """Count markdown links in inbox.md."""
+    """Count markdown links in inbox.md.
+
+    Handles:
+      - bare URLs: - https://arxiv.org/abs/1234.56789
+      - bare arxiv IDs: - 1234.56789
+      - markdown links: - [[id] Title](url) or - [Title](url)
+      - indented related links:   - related: [pdf](url)
+    """
     content = read_file(INBOX_MD)
-    links = re.findall(r'^\s*[-*]\s+https?://\S+', content, re.MULTILINE)
-    links += re.findall(r'^\s*[-*]\s+\d{4}\.\d{4,5}', content, re.MULTILINE)
+    # List items (possibly indented) containing a URL or arxiv ID pattern
+    links = re.findall(r'^\s*[-*]\s+(?=.*https?://|.*\d{4}\.\d{4,5}(?:v\d+)?).+', content, re.MULTILINE)
     return len(links)
 
 

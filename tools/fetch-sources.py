@@ -61,7 +61,8 @@ def fetch_arxiv(arxiv_id: str, out_path: Path) -> bool:
     try:
         from arxiv2md import ingest_paper_sync
         result = ingest_paper_sync(arxiv_id)
-        write_file(out_path, result.content)
+        content = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
+        write_file(out_path, content)
         return True
     except ImportError:
         pass
@@ -133,8 +134,10 @@ def fetch_pdf(url: str, out_path: Path) -> bool:
 
 
 def parse_brief_entries(brief_content: str, date_str: str = None) -> list[dict]:
-    """Parse brief.md entries, return list of {title, source_url, source_path, line_range}."""
-    HEADER = re.compile(r'^#{3,4} (.+)')
+    """Parse brief.md entries, return list of {title, source_url, source_path, line_range}.
+    Only processes ####-level entries, skipping ### group headers.
+    If date_str is set, only returns entries under that date section."""
+    HEADER = re.compile(r'^#{4} (.+)')  # only #### entries, skip ### groups
     entries = []
     lines = brief_content.split("\n")
 
@@ -142,7 +145,7 @@ def parse_brief_entries(brief_content: str, date_str: str = None) -> list[dict]:
     while i < len(lines):
         line = lines[i]
         header_match = HEADER.match(line)
-        if header_match and not line.lstrip().startswith("### ["):
+        if header_match:
             file_title = header_match.group(1).strip()
 
             if date_str:
@@ -204,6 +207,7 @@ def needs_fetch(file_path: Path) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Auto-fetch missing source files in brief.md")
     parser.add_argument("--date", type=str, help="Process entries from specific date (YYYY-MM-DD)")
+    parser.add_argument("--all", action="store_true", help="Process ALL entries regardless of date")
     args = parser.parse_args()
 
     if not BRIEF_FILE.exists():
@@ -215,12 +219,12 @@ def main():
         print("brief.md 为空。")
         return
 
-    today = date.today().isoformat()
-    date_str = args.date or today
+    date_str = args.date if args.date else (None if args.all else date.today().isoformat())
 
+    date_desc = f"日期 {date_str}" if date_str else "所有日期"
     entries = parse_brief_entries(brief_content, date_str)
     if not entries:
-        print("未找到条目。")
+        print(f"未找到条目（{date_desc}）。")
         return
 
     # Filter entries that have source_path
@@ -229,7 +233,7 @@ def main():
         print("所有条目均无源文件路径。")
         return
 
-    print(f"检查 {len(entries_with_path)} 个条目的源文件...\n")
+    print(f"检查 {len(entries_with_path)} 个条目（{date_desc}）的源文件...\n")
 
     fetched = 0
     skipped = 0

@@ -94,6 +94,14 @@ def convert_arxiv(arxiv_id: str, output: Path) -> Path:
 
     print(f"  ✓ Converted arXiv {arxiv_id} → {output.relative_to(REPO_ROOT)}")
 
+    # Normalize malformed arxiv HTML URLs (doubled /html/ prefix) in the output
+    if output.exists():
+        raw = output.read_text(encoding="utf-8")
+        fixed = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', raw)
+        if fixed != raw:
+            output.write_text(fixed, encoding="utf-8")
+            print(f"  ✓ Normalized {raw.count('//html/') - fixed.count('//html/')} malformed URLs")
+
     # Clean up arxiv2md cache
     cache_dir = REPO_ROOT / ".arxiv2md_cache"
     if cache_dir.exists():

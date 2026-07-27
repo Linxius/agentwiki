@@ -43,7 +43,7 @@ def call_llm(prompt, max_tokens=8192):
     """直接 LLM 调用已弃用。请使用 --phase1/--phase2 工作流：脚本写 prompt 到文件，agent spawn 子代理处理。"""
     print("Error: 直接 LLM 调用已弃用。请使用 --phase1/--phase2 工作流。")
     print("  python tools/<script>.py --phase1  # 生成 prompt 文件")
-    print("  # agent spawn 子代理处理 /tmp/wiki-tasks/*.json")
+    print(f"  # agent spawn 子代理处理 {TASK_DIR}/*.json")
     print("  python tools/<script>.py --phase2  # 读取结果继续处理")
     sys.exit(1)
 
@@ -65,8 +65,8 @@ def extract_wikilinks(content):
 # Scripts write prompts to files, agent spawns subagents to process them,
 # subagents write results back to files. Agent never reads large content.
 
-TASK_DIR = Path(os.environ.get("WIKI_TASK_DIR", "/tmp/wiki-tasks"))
-RESULT_DIR = Path(os.environ.get("WIKI_RESULT_DIR", "/tmp/wiki-results"))
+TASK_DIR = Path(os.environ.get("WIKI_TASK_DIR", str(REPO_ROOT / "raw" / ".tmp" / "wiki-tasks")))
+RESULT_DIR = Path(os.environ.get("WIKI_RESULT_DIR", str(REPO_ROOT / "raw" / ".tmp" / "wiki-results")))
 
 
 def prepare_task(task_id: str, prompt: str, max_tokens: int = 8192,

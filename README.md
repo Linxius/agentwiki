@@ -94,11 +94,11 @@ Works with markdown, PDF, DOCX, PPTX, XLSX, HTML, TXT, CSV, JSON, XML, RST, EPUB
 Agent 通过文件传输协议编排 LLM 调用，自身不读大文件：
 
 ```bash
-# Phase 1: 脚本写 prompt 到 /tmp/wiki-tasks/
+# Phase 1: 脚本写 prompt 到 raw/.tmp/wiki-tasks/
 python tools/filter.py --phase1
 
 # Agent spawn 子代理处理每个 prompt 文件
-# 子代理读 /tmp/wiki-tasks/<id>.json，写结果到 /tmp/wiki-results/<id>.txt
+# 子代理读 raw/.tmp/wiki-tasks/<id>.json，写结果到 raw/.tmp/wiki-results/<id>.txt
 
 # Phase 2: 脚本读结果，继续处理
 python tools/filter.py --phase2

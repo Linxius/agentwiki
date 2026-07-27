@@ -75,8 +75,26 @@ def read_inbox_md() -> list[dict]:
     raw_items = []
 
     for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("<!--") or line.startswith("---"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("<!--") or stripped.startswith("---"):
+            continue
+
+        # Related/sub-item line: parse URLs and attach to preceding item
+        if is_related_line(line):
+            if raw_items:
+                last = raw_items[-1]
+                related = last.setdefault("related_urls", [])
+                # Extract all [text](url) pairs from the line
+                for m in re.finditer(r'\[([^\]]+)\]\((https?://[^)]+)\)', line):
+                    label = m.group(1).lower()
+                    rurl = m.group(2).rstrip('`).,')
+                    # Normalize: if it's an alphaXiv URL, convert to arxiv
+                    rid = extract_arxiv_id(rurl)
+                    rurl = normalize_url(rurl, rid)
+                    rtype = _classify_url(rurl)
+                    # Deduplicate: skip if same URL already in related
+                    if not any(r["url"] == rurl for r in related):
+                        related.append({"url": rurl, "label": label, "type": rtype})
             continue
 
         # Try markdown link format: - [text](url)
@@ -84,12 +102,17 @@ def read_inbox_md() -> list[dict]:
         if md_match:
             url = md_match.group(1).rstrip('`).,')
             arxiv_id = extract_arxiv_id(url)
+            url = normalize_url(url, arxiv_id)
+            item = {"link": url, "raw": line}
             if arxiv_id:
-                raw_items.append({"link": url, "type": "arxiv", "arxiv_id": arxiv_id, "raw": line})
+                item.update({"type": "arxiv", "arxiv_id": arxiv_id})
             elif is_git_url(url):
-                raw_items.append({"link": url, "type": "git", "raw": line})
+                item["type"] = "git"
             elif is_url(url):
-                raw_items.append({"link": url, "type": "url", "raw": line})
+                item["type"] = "url"
+            else:
+                continue
+            raw_items.append(item)
             continue
 
         # Bare URL pattern: - https://...
@@ -97,12 +120,17 @@ def read_inbox_md() -> list[dict]:
         if url_match:
             url = url_match.group(1).rstrip('`).,')
             arxiv_id = extract_arxiv_id(url)
+            url = normalize_url(url, arxiv_id)
+            item = {"link": url, "raw": line}
             if arxiv_id:
-                raw_items.append({"link": url, "type": "arxiv", "arxiv_id": arxiv_id, "raw": line})
+                item.update({"type": "arxiv", "arxiv_id": arxiv_id})
             elif is_git_url(url):
-                raw_items.append({"link": url, "type": "git", "raw": line})
+                item["type"] = "git"
             elif is_url(url):
-                raw_items.append({"link": url, "type": "url", "raw": line})
+                item["type"] = "url"
+            else:
+                continue
+            raw_items.append(item)
             continue
 
         # git SSH pattern
@@ -183,10 +211,15 @@ def _dedup_by_arxiv_id(raw_items: list[dict]) -> list[dict]:
         if not primary:
             primary = group[0]
 
-        related_urls = []
+        # Preserve any related_urls already parsed from indented related: lines
+        existing_related = {r["url"] for r in primary.get("related_urls", [])}
+        related_urls = list(primary.get("related_urls", []))
         for item in group:
             if item is not primary:
-                related_urls.append({"url": item["link"], "type": _classify_url(item["link"])})
+                url = item["link"]
+                if url not in existing_related:
+                    related_urls.append({"url": url, "type": _classify_url(url)})
+                    existing_related.add(url)
 
         primary_idx = raw_items.index(primary)
         title = paper_titles.get(arxiv_id, "")
@@ -201,14 +234,19 @@ def _dedup_by_arxiv_id(raw_items: list[dict]) -> list[dict]:
                 continue
             if neighbor["type"] in ("git", "url") and not neighbor.get("arxiv_id"):
                 raw_text = neighbor.get("raw", "").lower()
+                nurl = neighbor["link"]
+                # Skip if already in related_urls (from parsed related: lines)
+                if nurl in existing_related:
+                    seen_indices.add(idx)
+                    continue
                 # Match by arxiv ID in text
                 if arxiv_id.replace(".", "") in raw_text.replace(".", ""):
-                    related_urls.append({"url": neighbor["link"], "type": _classify_url(neighbor["link"])})
+                    related_urls.append({"url": nurl, "type": _classify_url(nurl)})
                     seen_indices.add(idx)
                     continue
                 # Match by title keywords in repo name or bookmark text
                 if title and _title_matches_text(title, neighbor.get("raw", "")):
-                    related_urls.append({"url": neighbor["link"], "type": _classify_url(neighbor["link"])})
+                    related_urls.append({"url": nurl, "type": _classify_url(nurl)})
                     seen_indices.add(idx)
 
         # Mark group indices as seen
@@ -365,6 +403,30 @@ def extract_arxiv_id(text: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+def normalize_url(url: str, arxiv_id: str | None = None) -> str:
+    """Normalize URL: alphaxiv.org → arxiv.org, strip UTM/cursor params.
+
+    Args:
+        url: The original URL string.
+        arxiv_id: If provided and URL is alphaxiv, reconstruct a clean arxiv.org URL.
+    """
+    # Strip UTM and other tracking query params
+    url = re.sub(r'\?utm_[^&\s]+(&|$)', r'\1', url)
+    url = re.sub(r'\?chatId=[^&\s]+(&|$)', r'\1', url)
+    url = url.rstrip('?&')
+
+    # alphaxiv.org/abs/ID → arxiv.org/abs/ID
+    if arxiv_id and "alphaxiv.org" in url:
+        return f"https://arxiv.org/abs/{arxiv_id}"
+
+    return url
+
+
+def is_related_line(line: str) -> bool:
+    """Check if line is a sub-item/related URL line (indented with '  - related:' or similar)."""
+    return bool(re.match(r'^\s{2,}[-*]\s+(related|see also|notes):', line, re.IGNORECASE))
 
 
 def is_url(text: str) -> bool:
@@ -743,7 +805,7 @@ def _download_image(url: str, dest_dir: Path) -> str | None:
 
 
 def _fix_image_paths(md_path: Path, md_dir: Path):
-    """Post-process arxiv2md output: download images to figures/ and update paths.
+    """Post-process arxiv2md output: normalize URLs, download images to figures/ and update paths.
 
     Linxius version outputs: ![Refer to caption](https://arxiv.org/.../figures/x.png)
     This downloads images locally and updates paths to: ![Refer to caption](figures/x.png)
@@ -752,6 +814,9 @@ def _fix_image_paths(md_path: Path, md_dir: Path):
         return
     content = md_path.read_text(encoding="utf-8")
     original = content
+
+    # Normalize malformed arxiv HTML URLs (doubled /html/ prefix)
+    content = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', content)
 
     def _download_and_replace(m):
         alt = m.group(1)
@@ -790,6 +855,7 @@ def process_link(item: dict, out_dir: Path) -> str:
         arxiv_dir.mkdir(parents=True, exist_ok=True)
         out_file = arxiv_dir / f"{slug}.md"
         content = fetch_arxiv(arxiv_id, out_path=out_file)
+        content = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', content)
         # Add related_urls to frontmatter
         related = item.get("related_urls", [])
         if related:
@@ -801,7 +867,9 @@ def process_link(item: dict, out_dir: Path) -> str:
                     content = content[:end] + related_block + content[end:]
             else:
                 content = f"---\n{related_block}---\n{content}"
-            out_file.write_text(content, encoding="utf-8")
+        out_file.write_text(content, encoding="utf-8")
+        # Post-process: normalize URLs again (safety), download images locally
+        _fix_image_paths(out_file, arxiv_dir)
 
         return out_file
     else:

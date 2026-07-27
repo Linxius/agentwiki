@@ -26,8 +26,8 @@ The LLM reads the source, extracts knowledge, and updates the wiki:
   - Runs post-ingest validation (broken links, index coverage)
 
 Phase 1/2 file transfer protocol:
-  --phase1: Build prompt and write to /tmp/wiki-tasks/ for subagent processing.
-  --phase2: Read subagent results from /tmp/wiki-results/ and continue processing.
+  --phase1: Build prompt and write to raw/.tmp/wiki-tasks/ for subagent processing.
+  --phase2: Read subagent results from raw/.tmp/wiki-results/ and continue processing.
   This avoids LLM calls in the main agent; subagents handle LLM推理.
 """
 
@@ -122,6 +122,43 @@ def build_wiki_context() -> str:
         for p in recent:
             parts.append(f"## {p.relative_to(REPO_ROOT)}\n{p.read_text()}")
     return "\n\n---\n\n".join(parts)
+
+
+_SHARED_CONTEXT_PATH: Path | None = None  # module-level cache, set once per process
+
+
+def get_shared_ingest_context() -> Path | None:
+    """Write shared schema + wiki context to a file subagents can read independently.
+    Returns the path, or None if writing fails. Module-level cache: writes once per process.
+    
+    The file is written to raw/.tmp/wiki-ingest-context.md so subagents can read it
+    with the 'read' tool instead of receiving the ~68KB schema inline in every prompt.
+    """
+    global _SHARED_CONTEXT_PATH
+    if _SHARED_CONTEXT_PATH and _SHARED_CONTEXT_PATH.exists():
+        return _SHARED_CONTEXT_PATH
+
+    shared_dir = REPO_ROOT / "raw" / ".tmp"
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    shared_path = shared_dir / "wiki-ingest-context.md"
+    
+    schema = read_file(SCHEMA_FILE)
+    wiki_context = build_wiki_context()
+    
+    content = f"""# 共享 Wiki 上下文（子代理读此文件而非内联）
+ 
+## Schema and conventions（Wiki 体系结构与模板约定）
+ 
+{schema}
+ 
+## Current wiki state（当前索引 + 近期页面）
+ 
+{wiki_context or "(wiki is empty — this is the first source)"}
+"""
+    shared_path.write_text(content, encoding="utf-8")
+    _SHARED_CONTEXT_PATH = shared_path
+    return shared_path
+
 
 
 def parse_interests(content: str) -> list[dict]:
@@ -499,16 +536,29 @@ def build_ingest_image_prompt(available_images):
     """Build image section for ingest LLM prompt."""
     if not available_images:
         return ""
-    parts = ["\n---\n源文档中包含以下图片，可供 wiki 页面使用："]
+    parts = ["\n---\n源文档中包含以下图片，可供 wiki 页面引用："]
     for url, filename, alt in available_images:
         caption = alt if alt else '(无标题)'
-        parts.append(f"- `{filename}` — {caption}")
+        parts.append(f"- `{filename}` — {caption} (URL: {url})")
     parts += [
         "",
-        "对于选中的图片，在 source_page 中用以下格式引用：",
-        "`![图片标题](images/{slug}/fig1.png)`",
-        "其中 {slug} 使用你定义的 slug 字段值。",
-        "判断标准：核心架构图、流程图、关键结果图等对理解本文有帮助的图片。",
+        "图片引用规则（优先使用 arxiv HTML URL，如 `https://arxiv.org/html/XXXX.XXXXX/figures/images/xxx.png`，URL 更稳定且节省空间）：",
+        "1. 在 source_page 中用 `![描述](images/{slug}/fig1.png)` 引用下载到本地的图片",
+        "2. 也可以直接引用 arxiv 原始 URL：`![描述](https://arxiv.org/html/.../figures/images/xxx.png)`",
+        "",
+        "选择标准（严格按优先级）：",
+        "  P0 - 方法框架图/管线图/架构图：必须选中，放在 ## Method 第一行（紧跟标题之后，在 ### 子节之前）",
+        "  P1 - 关键结果对比图/效果图：可选，放在 ## Results 或 ## Comparisons 中",
+        "  P2 - 消融实验图/可视化：可选，放在 ## Ablations 中",
+        "  ❌ 不选：实验结果表格截图、作者头像、数据集示例图（与wiki无关的）",
+        "",
+        "Method 章节中，框架图必须是第一个内容元素：",
+        "  ## Method",
+        "  ",
+        "  ![框架图描述](images/{slug}/fig1.png)",
+        "  ",
+        "  ### 整体思路",
+        "  ...",
     ]
     return "\n".join(parts)
 
@@ -536,16 +586,23 @@ def copy_referenced_images(report_content, slug, tmp_image_dir):
 
 
 def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
-                        url_instruction, today, source_content, wiki_context,
-                        schema, img_prompt_section):
-    """Build the LLM prompt for ingesting a source document."""
+                        url_instruction, today, source_content,
+                        img_prompt_section, shared_context_path: str = ""):
+    """Build the LLM prompt for ingesting a source document.
+    
+    When shared_context_path is set, the subagent reads schema + wiki context
+    from that file instead of receiving it inline (saves ~68KB per task).
+    """
+    context_section = (
+        f"Read shared wiki context from `{shared_context_path}` "
+        "(README there defines schema, conventions, templates, and current wiki state)."
+        if shared_context_path
+        else "(wiki is empty — this is the first source)"
+    )
     return f"""You are maintaining an LLM Wiki. Process this source document and integrate its knowledge into the wiki.
 
 Schema and conventions:
-{schema}
-
-Current wiki state (index + recent pages):
-{wiki_context if wiki_context else "(wiki is empty — this is the first source)"}
+{context_section}
 
 New source to ingest (file: {source_file_repo}):
 source_file (repo-relative): {source_file_repo}
@@ -586,7 +643,7 @@ Return ONLY a valid JSON object with these fields (no markdown fences, no prose 
 
 
 def ingest(source_path: str, auto_convert: bool = True):
-    source = Path(source_path)
+    source = Path(source_path).resolve()
     if not source.exists():
         print(f"Error: file not found: {source_path}")
         sys.exit(1)
@@ -612,12 +669,15 @@ def ingest(source_path: str, auto_convert: bool = True):
     # Resolve original source URL
     source_url = extract_url_from_file(source, source_content)
     if not source_url:
-        print(f"  ⚠️  未找到原始出处 URL")
-        user_url = input(f"  请输入「{source.name}」的原始出处 URL（留空跳过）: ").strip()
-        if user_url:
-            source_url = user_url
-            inject_source_url(source, source_url)
-            print(f"  ✅ URL 已写入文件 frontmatter")
+        if sys.stdin.isatty() and '--phase1' not in sys.argv:
+            print(f"  ⚠️  未找到原始出处 URL")
+            user_url = input(f"  请输入「{source.name}」的原始出处 URL（留空跳过）: ").strip()
+            if user_url:
+                source_url = user_url
+                inject_source_url(source, source_url)
+                print(f"  ✅ URL 已写入文件 frontmatter")
+        else:
+            print(f"  ⚠️  未找到原始出处 URL，非交互模式跳过")
 
     raw_relative_path = os.path.relpath(
         str(source), str(WIKI_DIR / "sources")
@@ -654,13 +714,14 @@ def ingest(source_path: str, auto_convert: bool = True):
             shutil.rmtree(tmp_img_dir, ignore_errors=True)
             tmp_img_dir = None
 
-    wiki_context = build_wiki_context()
-    schema = read_file(SCHEMA_FILE)
+    # Use shared context file for --phase1 to save ~68KB/task of repeated schema
+    shared_ctx_path = get_shared_ingest_context()
+    shared_ctx_arg = str(shared_ctx_path.relative_to(REPO_ROOT)) if shared_ctx_path else ""
 
     prompt = build_ingest_prompt(
         source_file_repo, raw_relative_path, source_url_display,
-        url_instruction, today, source_content, wiki_context,
-        schema, img_prompt_section,
+        url_instruction, today, source_content,
+        img_prompt_section, shared_context_path=shared_ctx_arg,
     )
 
     # ── Phase 1: write prompt to file for subagent ──
@@ -686,7 +747,6 @@ def ingest(source_path: str, auto_convert: bool = True):
         if not raw:
             print(f"Error: no result found for {task_id}")
             sys.exit(1)
-        clean_task_dirs()
     else:
         # Default mode: direct LLM call
         print(f"  calling API (model: ...)")
@@ -780,13 +840,103 @@ def ingest(source_path: str, auto_convert: bool = True):
     print()
 
 
-def run_from_digest(date_str: str = None):
+def _parse_entry_from_brief(lines: list[str], start_i: int, entry_lines: list[str]) -> dict:
+    """Parse a single brief.md entry into a structured dict."""
+    entry = {'title': '', 'source_url': '', 'domain': '', 'keywords': '', 'source_file': ''}
+    title_line = lines[start_i]
+    if title_line.startswith('#### '):
+        entry['title'] = title_line[5:].strip()
+    elif title_line.startswith('### '):
+        entry['title'] = title_line[4:].strip()
+    for el in entry_lines:
+        m = re.match(r'- 来源:\s*(.*)', el)
+        if m:
+            entry['source_url'] = m.group(1).strip()
+        m = re.match(r'- 领域:\s*(.*)', el)
+        if m:
+            entry['domain'] = m.group(1).strip()
+        m = re.match(r'- 关键词:\s*(.*)', el)
+        if m:
+            entry['keywords'] = m.group(1).strip()
+        m = re.match(r'- 源文件:\s*\[([^\]]+)\]', el)
+        if m:
+            entry['source_file'] = m.group(1).strip()
+    return entry
+
+
+def _group_entries_for_merge(entries: list[dict]) -> list[list[dict]]:
+    """Group entries that should be merged into a single wiki page.
+    
+    Merge criteria (descending priority):
+    1. Same non-empty source_url
+    2. Same domain + source filenames share ≥2 meaningful words (≥3 chars)
+    """
+    GENERIC_WORDS = {'for', 'and', 'the', 'on', 'at', 'in', 'with', 'to', 'of', 'a',
+                     'from', 'by', 'via', 'using', 'based', 'real', 'time', 'end',
+                     'new', 'novel', 'toward', 'towards', 'method', 'approach',
+                     'model', 'data', 'image', 'scene', 'neural', 'learning',
+                     'high', 'low', 'large', 'small', 'fast', 'rendering'}
+    
+    def filename_words(name: str) -> set:
+        stem = Path(name).stem.lower()
+        words = set(re.findall(r'[a-z]+', stem))
+        return {w for w in words if len(w) >= 3 and w not in GENERIC_WORDS}
+    
+    groups: list[list[dict]] = []
+    used = set()
+    
+    for i, a in enumerate(entries):
+        if i in used:
+            continue
+        group = [a]
+        used.add(i)
+        a_words = filename_words(a.get('source_file', ''))
+        
+        for j, b in enumerate(entries):
+            if j in used:
+                continue
+            # Criterion 1: same non-empty source_url
+            if a.get('source_url') and a['source_url'] == b.get('source_url'):
+                group.append(b)
+                used.add(j)
+            # Criterion 2: same domain + keyword overlap in filenames
+            elif a.get('domain') and a['domain'] and a['domain'] == b.get('domain'):
+                b_words = filename_words(b.get('source_file', ''))
+                if len(a_words & b_words) >= 2:
+                    group.append(b)
+                    used.add(j)
+        
+        groups.append(group)
+    
+    return groups
+
+
+def _combine_source_files(file_paths: list[Path]) -> Path | None:
+    """Combine multiple source files into one temp file with section headers."""
+    combined_parts = []
+    for fp in file_paths:
+        if not fp or not fp.exists():
+            continue
+        content = read_file(fp)
+        title_hint = fp.stem.replace('-', ' ').title()
+        combined_parts.append(f"## {title_hint}\n\n{content}")
+    
+    if not combined_parts:
+        return None
+    
+    combined = "\n\n---\n\n".join(combined_parts)
+    temp = REPO_ROOT / "raw" / "digest" / f"_merged_{Path(file_paths[0]).stem}.md"
+    write_file(temp, combined)
+    return temp
+
+
+def run_from_digest(date_str: str = None, auto_yes: bool = False):
     """Process files from digest/YYYY-MM-DD/brief.md marked for wiki ingest.
     
     1. Read brief.md to find entries marked "[x] 合入 wiki"
-    2. Show list to user for category confirmation
+    2. Show list to user for category confirmation, with merge suggestions
     3. Move files to appropriate category directory
-    4. Call ingest() for each file
+    4. Call ingest() for each file (merged groups → single ingest)
     """
     from datetime import date as _date
     today_str = _date.today().isoformat()
@@ -800,25 +950,28 @@ def run_from_digest(date_str: str = None):
     
     brief_content = read_file(brief_file)
     
+    # Detect brief date from header (e.g. "# 资讯简报  YYYY-MM-DD")
+    brief_date_match = re.search(r'#\s+资讯简报\s+(\d{4}-\d{2}-\d{2})', brief_content[:200])
+    brief_date = brief_date_match.group(1) if brief_date_match else None
+    
+    # Clean up analysis-results.json — no longer needed after brief is confirmed
+    for f in (digest_dir / "analysis-results.json", digest_dir / "analysis-results.jsonc"):
+        if f.exists():
+            f.unlink()
+            print(f"  🧹 已删除中间文件: {f.relative_to(REPO_ROOT)}")
+    
+    # If date_str specified, skip briefs that don't match
+    if date_str and brief_date and brief_date != date_str:
+        print(f"brief.md 的日期 ({brief_date}) 与请求的日期 ({date_str}) 不匹配，跳过")
+        return
+    
     # Parse entries with "[x] 合入 wiki"
+    entry_re = re.compile(r'^#{2,4} ')
     entries = []
     lines = brief_content.split('\n')
     i = 0
     while i < len(lines):
         if (lines[i].startswith('#### ') or lines[i].startswith('### ')) and not lines[i].startswith('### ['):
-            title = lines[i][4:].strip() if lines[i].startswith('#### ') else lines[i][4:].strip()
-            
-            # Check if this entry is for the specified date
-            if date_str:
-                found = False
-                for j in range(max(0, i-10), i):
-                    if date_str in lines[j]:
-                        found = True
-                        break
-                if not found:
-                    i += 1
-                    continue
-            
             # Collect entry lines
             entry_lines = []
             next_i = i + 1
@@ -827,17 +980,7 @@ def run_from_digest(date_str: str = None):
                 next_i += 1
             
             if re.search(r'\[x\]\s*合入 wiki|\[X\]\s*合入 wiki', '\n'.join(entry_lines)):
-                # Extract source URL from entry
-                source_url = ''
-                for el in entry_lines:
-                    m = re.match(r'- 来源:\s*(.*)', el)
-                    if m:
-                        source_url = m.group(1).strip()
-                        break
-                entries.append({
-                    'title': title,
-                    'source_url': source_url,
-                })
+                entries.append(_parse_entry_from_brief(lines, i, entry_lines))
             
             i = next_i
         else:
@@ -847,82 +990,155 @@ def run_from_digest(date_str: str = None):
         print("No entries marked for wiki ingest.")
         return
     
-    print(f"Found {len(entries)} entries marked for wiki ingest:\n")
+    print(f"Found {len(entries)} entries marked for wiki ingest.\n")
     
-    # Try to find files in sources/
-    date_to_process = date_str or today_str
-    sources_dir = digest_dir / "sources" / date_to_process
-    
-    processed_files = []
+    # Resolve file paths — search across all date dirs in sources/
+    sources_base = digest_dir / "sources"
     for entry in entries:
-        title = entry['title']
-        # Try to find matching file
-        found_file = None
-        if sources_dir.exists():
-            for f in sources_dir.iterdir():
-                if title in f.name or f.name.startswith(title.split('.')[0]):
-                    found_file = f
-                    break
-        
-        if found_file:
-            entry['file_path'] = found_file
-            entry['current_path'] = str(found_file.relative_to(REPO_ROOT))
-            processed_files.append(entry)
+        source_file = entry.get('source_file', '')
+        if not source_file:
+            continue
+        candidate = Path(source_file)
+        if candidate.exists():
+            entry['file_path'] = candidate
+            entry['current_path'] = source_file
         else:
-            print(f"⚠️  File not found for: {title}")
-            print(f"  Looking in: {sources_dir}")
+            # Search across all date subdirectories
+            fname = candidate.name
+            found = None
+            for d in sorted(sources_base.iterdir()):
+                if d.is_dir() and d.name != ".gitkeep":
+                    candidate_path = d / fname
+                    if candidate_path.exists():
+                        found = candidate_path
+                        break
+            if found:
+                entry['file_path'] = found
+                entry['current_path'] = str(found.relative_to(REPO_ROOT))
     
-    if not processed_files:
-        print("No files found to ingest.")
+    # Remove entries without resolvable files
+    entries = [e for e in entries if e.get('file_path')]
+    
+    if not entries:
+        print("No source files found to ingest.")
         return
     
-    # Show what will be ingested and ask for category confirmation
+    # ── Merge detection ──
+    merged_groups = _group_entries_for_merge(entries)
+    total_items = sum(len(g) for g in merged_groups)
+    if total_items != len(entries):
+        # sanity check — should never happen
+        merged_groups = [[e] for e in entries]
+    
+    # Show what will be ingested
     print("=" * 60)
-    print("文件确认 (Files to ingest):")
+    print("待合入条目 (Files to ingest):")
     print("=" * 60)
-    for entry in processed_files:
-        cat = entry.get('suggested_category', 'papers')
-        print(f"\n- {entry['title']}")
-        print(f"  当前路径: {entry['current_path']}")
-        print(f"  建议分类: {cat}/")
+    need_category_input = False
+    for group in merged_groups:
+        if len(group) > 1:
+            print(f"\n🔗 合并组 ({len(group)} 条):")
+            for e in group:
+                print(f"   - {e['title']}")
+                print(f"     源文件: {e.get('current_path', '?')}")
+                print(f"     领域: {e.get('domain', '?')}")
+            need_category_input = True
+        else:
+            e = group[0]
+            print(f"\n- {e['title']}")
+            print(f"  源文件: {e.get('current_path', '?')}")
+            print(f"  领域: {e.get('domain', '?')}")
+    
+    # Determine category for each entry (all default to 'papers' from digest)
+    for group in merged_groups:
+        if len(group) > 1:
+            print(f"\n合并组分类 [papers]: ", end="")
+            if auto_yes or not sys.stdin.isatty():
+                print("papers (--yes/非交互)")
+                cat = 'papers'
+            else:
+                cat = input().strip().lower() or 'papers'
+            for e in group:
+                e['category'] = cat
+        else:
+            e = group[0]
+            e['category'] = 'papers'
     
     print("\n" + "=" * 60)
-    confirm = input("确认合入 wiki? [y/N]: ").strip().lower()
-    if confirm != 'y':
-        print("已取消。")
-        return
+    if auto_yes or not sys.stdin.isatty():
+        print("--yes/非交互模式，自动确认合入。")
+    else:
+        confirm = input("确认合入 wiki? [y/N]: ").strip().lower()
+        if confirm != 'y':
+            print("已取消。")
+            return
     
-    # Ingest each file
+    # ── Ingest ──
     print("\n开始合入 wiki...")
-    for entry in processed_files:
-        file_path = entry['file_path']
-        print(f"\nIngesting: {file_path.name}")
-        
-        # Get category from entry or use suggestion
-        category = entry.get('suggested_category', 'papers')
-        
-        # If destination has same file, skip
-        dest_dir = REPO_ROOT / "raw" / category
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = dest_dir / file_path.name
-        
-        if dest_path.exists():
-            print(f"  目标已存在: {dest_path.relative_to(REPO_ROOT)}，跳过")
-            continue
-        
-        # Move file to category directory
-        shutil.move(str(file_path), str(dest_path))
-        print(f"  移动: {dest_path.relative_to(REPO_ROOT)}")
-
-        # Inject source URL into the file before ingest
-        if entry.get('source_url'):
-            inject_source_url(dest_path, entry['source_url'])
-        
-        # Run actual ingest
-        ingest(str(dest_path), auto_convert=True)
-        
-        processed_files.append(entry)
-        # Update status
+    
+    # run_from_digest always uses --phase1 workflow (direct LLM calls are deprecated)
+    if '--phase1' not in sys.argv:
+        sys.argv.append('--phase1')
+    
+    for group in merged_groups:
+        if len(group) > 1:
+            # ── Merged group: combine files, ingest once ──
+            file_paths = [e['file_path'] for e in group if e.get('file_path')]
+            combined = _combine_source_files(file_paths)
+            if not combined:
+                print("  ⚠️  合并失败，跳过")
+                continue
+            
+            # Determine slug from first entry's source file
+            first_slug = Path(file_paths[0]).stem
+            category = group[0].get('category', 'papers')
+            dest_dir = REPO_ROOT / "raw" / category
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = dest_dir / f"{first_slug}.md"
+            
+            if dest_path.exists():
+                print(f"  目标已存在: {dest_path.relative_to(REPO_ROOT)}，跳过")
+            else:
+                shutil.move(str(combined), str(dest_path))
+                print(f"  🔗 合并文件 → {dest_path.relative_to(REPO_ROOT)}")
+                
+                # Inject source URLs
+                urls = [e.get('source_url', '') for e in group if e.get('source_url')]
+                if urls:
+                    inject_source_url(dest_path, urls[0])
+                
+                ingest(str(dest_path), auto_convert=True)
+        else:
+            # ── Single entry ──
+            entry = group[0]
+            file_path = entry['file_path']
+            print(f"\nIngesting: {file_path.name}")
+            
+            category = entry.get('category', 'papers')
+            dest_dir = REPO_ROOT / "raw" / category
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = dest_dir / file_path.name
+            
+            if dest_path.exists():
+                print(f"  目标已存在: {dest_path.relative_to(REPO_ROOT)}，跳过")
+                continue
+            
+            shutil.copy2(str(file_path), str(dest_path))
+            print(f"  复制: {dest_path.relative_to(REPO_ROOT)}")
+            
+            if entry.get('source_url'):
+                inject_source_url(dest_path, entry['source_url'])
+            else:
+                print(f"  ⚠️  无 source_url，跳过 URL 注入")
+            
+            try:
+                ingest(str(dest_path), auto_convert=True)
+                # Only remove source after successful ingest
+                file_path.unlink()
+                print(f"  🧹 已清理 sources/ 中的原始文件: {file_path.name}")
+            except Exception:
+                print(f"  ⚠️  ingest 失败，保留 sources/ 中的原始文件: {file_path.name}")
+                raise
     
     print("\n✅ 合入完成！")
 
@@ -973,8 +1189,9 @@ if __name__ == "__main__":
     
     # Handle --from-digest mode
     if from_digest:
+        auto_yes = "--yes" in sys.argv
         print("Processing files from digest/ for wiki ingest...\n")
-        run_from_digest(date_str)
+        run_from_digest(date_str, auto_yes=auto_yes)
         sys.exit(0)
     
     if not args:
