@@ -788,7 +788,7 @@ def move_source(file_path: Path, date_str: str):
 
 
 def clear_inbox(skip_rel_paths: set[str] | None = None):
-    """Clear inbox/ directory (keep inbox.md, empty its content). Keep files in skip_rel_paths."""
+    """Clear inbox/ directory files. Does NOT touch inbox.md content (handled by _clean_inbox_md())."""
     if not INBOX_DIR.exists():
         INBOX_DIR.mkdir(parents=True, exist_ok=True)
     inbox_files = list(INBOX_DIR.iterdir())
@@ -802,15 +802,12 @@ def clear_inbox(skip_rel_paths: set[str] | None = None):
 
     skipped = set()
     if skip_rel_paths:
-        # convert rel paths to just filenames for comparison
         skipped = {Path(p).name for p in skip_rel_paths}
 
     count = 0
     for f in inbox_files:
         if f.name == "inbox.md":
-            f.write_text("# Inbox\n\n- \n", encoding="utf-8")
-            print("  📝 清空 inbox.md 内容")
-            continue
+            continue  # inbox.md 内容由 _clean_inbox_md 单独处理
         if f.name in skipped:
             print(f"  ⏭️  跳过失败文件: {f.name}")
             continue
@@ -823,9 +820,35 @@ def clear_inbox(skip_rel_paths: set[str] | None = None):
         print(f"  ✅ 已清空 inbox/ ({count} 个文件)")
 
     # Ensure inbox.md exists
-    inbox_md_path = INBOX_DIR / "inbox.md"
-    if not inbox_md_path.exists() or not inbox_md_path.read_text(encoding="utf-8").strip():
-        inbox_md_path.write_text("# Inbox\n\n- \n", encoding="utf-8")
+    inbox_md = INBOX_DIR / "inbox.md"
+    if not inbox_md.exists() or not inbox_md.read_text(encoding="utf-8").strip():
+        inbox_md.write_text("# Inbox\n\n- \n", encoding="utf-8")
+
+
+def _clean_inbox_md(processed_urls: set[str]):
+    """Remove from inbox.md lines whose URLs were successfully processed.
+    Lines for failed/never-downloaded entries stay so the user can retry.
+    """
+    inbox_md = INBOX_DIR / "inbox.md"
+    if not inbox_md.exists():
+        return
+    content = inbox_md.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    kept = ["# Inbox", ""]
+    removed = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Extract URL from the line
+        url_match = re.search(r'(https?://\S+)', stripped)
+        if url_match and url_match.group(1).rstrip(')').rstrip('.,') in processed_urls:
+            removed += 1
+            continue  # was processed → remove
+        kept.append(line)
+    inbox_md.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    if removed:
+        print(f"  📝 inbox.md: 清除 {removed} 条已处理条目，未处理条目已保留")
 
 
 def append_log(entry: str):
@@ -969,7 +992,9 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
                     print(f"  ⚠️  move failed for {fp.name}: {e}")
 
         # Clear inbox
+        processed_urls = {r.get("source_url", "") for r in results if r.get("source_url")}
         clear_inbox(skip_rel_paths=failed_files)
+        _clean_inbox_md(processed_urls)
         print("  🧹 inbox/ 已清空")
 
     # Print suggestions
@@ -1292,7 +1317,9 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                     print(f"    ⚠️  move failed: {e}")
 
         if not failed_files:
+            processed_urls = {r.get("source_url", "") for r in results if r.get("source_url")}
             clear_inbox(skip_rel_paths=failed_files)
+            _clean_inbox_md(processed_urls)
         else:
             print(f"  ⏭️  跳过 inbox 清理（{len(failed_files)} 个文件分析失败，保留 inbox.md 不变）")
 
