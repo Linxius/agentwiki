@@ -32,8 +32,29 @@ This wiki is maintained entirely by your coding agent. No API key needed — jus
 | `read code` / `代码阅读` | 子代理驱动代码分析 | [code-read.md](docs/workflows/code-read.md) |
 | `status` / `流程状态` | 检查各节点进度并建议下一步 | — |
 | `fetch sources` / `抓取源文件` | 抓取 brief 中缺失的源文件 | — |
+| `fetch alphaxiv` / `补充 alphaXiv` | 用 MCP 获取下载失败的论文全文 | 见下方 #arXiv 下载失败自动处理 |
 
-Agent 主动提醒（完整列表见 `triggers.md` #Agent 主动提醒）：inbox 待处理、filter 待执行、deep-read 待生成、ingest 待合入、feeds 过期、源文件缺失。
+Agent 主动提醒（完整列表见 `triggers.md` #Agent 主动提醒）：inbox 待处理、filter 待执行、deep-read 待生成、ingest 待合入、feeds 过期、源文件缺失、arxiv 下载失败需 alphaXiv 补充。
+
+## arXiv 下载失败自动处理
+
+`inbox.py` 的 arxiv2md / pdf2md / alphaXiv HTTP overview 均失败时，会在源文件中写入以下标记：
+
+```yaml
+agent_action: fetch_alphaxiv
+agent_note: "内容过短 (113 bytes, 阈值 5000)"
+```
+
+### Agent 操作步骤
+
+1. `grep -r "agent_action: fetch_alphaxiv" raw/inbox/` 扫描待处理文件
+2. 对每个文件，提取 arxiv ID（从 URL 或文件名），调用 `alphaxiv_get_paper_content`：
+   ```
+   alphaxiv_get_paper_content(url="https://arxiv.org/abs/{id}", fullText=true)
+   ```
+3. 将返回的完整论文内容（markdown）覆盖写回原文件
+4. 删除该文件的 YAML 中的 `agent_action`/`agent_note` 行（或保留但改为 `agent_action: done`）
+5. 之后 `filter` 正常处理该文件
 
 ## 流程优化
 
@@ -41,7 +62,7 @@ Agent 主动提醒（完整列表见 `triggers.md` #Agent 主动提醒）：inbo
 
 ## Status Flow
 
-`inbox.md 链接` → `inbox 处理（inbox/）` → `filter 筛选` → `brief 待确认` → `深度阅读 / 合入 wiki` → `已合入/已跳过`
+`inbox.md 链接` → `inbox 处理（inbox/）` → `[失败? → alphaXiv MCP 补充]` → `filter 筛选` → `brief 待确认` → `深度阅读 / 合入 wiki` → `已合入/已跳过`
 
 每次用 `python tools/status.py` 检查当前阶段。依次检查：
 1. **inbox.md 链接数** — 是否有未处理链接
