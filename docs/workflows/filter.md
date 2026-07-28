@@ -25,6 +25,8 @@ Steps:
 7. 控制台汇总 LLM 建议的新增兴趣/排除项供参考
 
 **旧工作流（废弃）：** `--phase1/--phase2` 文件传输协议。不再使用。
+  > 如仍使用 phase2，注意结果文件必须由 `_utils.write_result(tid, content)` 写入（产生 `{tid}.txt` + `{tid}.done`），
+  > 不要手动创建文件。传递 `--keep-phase2-results` 可防止 `clean_task_dirs()` 删掉中间产物。
 
 ## ⚠️ 兴趣匹配规则（保守原则）
 

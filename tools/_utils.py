@@ -133,7 +133,12 @@ def read_result(task_id: str) -> str:
 def write_result(task_id: str, content: str):
     """Write result + .done marker atomically.
     
-    Subagents should call this (via the parent agent) to signal completion.
+    Creates two files:
+      RESULT_DIR/{task_id}.txt     — the result content
+      RESULT_DIR/{task_id}.done    — completion marker (empty file)
+    
+    read_results() globs *.txt and checks matching {stem}.done.
+    DO NOT create files manually — always call this function.
     The .done file lets phase2 reliably distinguish "finished with empty result"
     from "not yet written".
     """

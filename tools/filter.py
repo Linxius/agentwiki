@@ -3,13 +3,17 @@
 Filter and classify files in raw/inbox/ based on wiki interests.
 
 Usage:
-    python tools/filter.py              # main mode
-    python tools/filter.py --dry-run    # show what would be done
+    python tools/filter.py                          # 自动模式（call_llm 返回空则 fallback 到 phase1）
+    python tools/filter.py --dry-run                # 模拟运行
+    python tools/filter.py --phase1                 # 写分析任务到 TASK_DIR（子代理处理）
+    python tools/filter.py --phase2                 # 从 RESULT_DIR 读取结果并生成 brief
+    python tools/filter.py --build-brief <json>     # 直接从预分析 JSON 构建 brief
+    python tools/filter.py --build-brief <json> --keep-phase2-results
 
 Flow:
     1. Scan raw/inbox/ for files
     2. Read wiki/interests.md
-    3. Use LLM to generate brief summary (3-5 sentences) + detailed report (500-800 words)
+    3. Analyze each file（子代理批处理 or phase1-phase2 协议）
     4. Match against interests (interested / possibly interested / not interested)
     5. Generate raw/digest/brief.md with entries sorted by match level
     6. Move files to raw/digest/sources/YYYY-MM-DD/
@@ -1143,7 +1147,10 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                 except Exception as e:
                     print(f"  ⚠️  {fp.name} parse failed: {e}")
                     failed_files.add(rel)
-            clean_task_dirs()
+            if "--keep-phase2-results" not in sys.argv:
+                clean_task_dirs()
+            else:
+                print("  ℹ️  --keep-phase2-results: 保留 TASK_DIR / RESULT_DIR")
         else:
             # Normal mode: try direct LLM calls.
             # If call_llm returns empty (phase1 architecture where agent=LLM),

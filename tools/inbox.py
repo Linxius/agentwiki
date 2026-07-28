@@ -46,6 +46,7 @@ INBOX_MD = INBOX_DIR / "inbox.md"
 ARXIV_PATTERNS = [
     re.compile(r"arxiv\.org/abs/(\d{4}\.\d{4,5})(v\d+)?"),
     re.compile(r"arxiv\.org/pdf/(\d{4}\.\d{4,5})(v\d+)?"),
+    re.compile(r"arxiv\.org/html/(\d{4}\.\d{4,5})(v\d+)?"),
     re.compile(r"alphaxiv\.org/abs/(\d{4}\.\d{4,5})"),
     re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?$"),
 ]
@@ -406,11 +407,11 @@ def extract_arxiv_id(text: str) -> str | None:
 
 
 def normalize_url(url: str, arxiv_id: str | None = None) -> str:
-    """Normalize URL: alphaxiv.org → arxiv.org, strip UTM/cursor params.
+    """Normalize URL: alphaxiv.org → arxiv.org, arxiv.org/html/ → arxiv.org/abs/, strip UTM/cursor params.
 
     Args:
         url: The original URL string.
-        arxiv_id: If provided and URL is alphaxiv, reconstruct a clean arxiv.org URL.
+        arxiv_id: If provided and URL matches a known arxiv variant, reconstruct a clean arxiv.org/abs/ URL.
     """
     # Strip UTM and other tracking query params
     url = re.sub(r'\?utm_[^&\s]+(&|$)', r'\1', url)
@@ -419,6 +420,10 @@ def normalize_url(url: str, arxiv_id: str | None = None) -> str:
 
     # alphaxiv.org/abs/ID → arxiv.org/abs/ID
     if arxiv_id and "alphaxiv.org" in url:
+        return f"https://arxiv.org/abs/{arxiv_id}"
+
+    # arxiv.org/html/ID → arxiv.org/abs/ID (HTML 全文版与 abs 页等效)
+    if arxiv_id and "arxiv.org/html/" in url:
         return f"https://arxiv.org/abs/{arxiv_id}"
 
     return url
