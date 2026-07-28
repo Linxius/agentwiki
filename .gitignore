@@ -27,6 +27,7 @@ wiki/.ingest_tmp_imgs/
 
 # === 缓存 ===
 .arxiv2md_cache/
+raw/.tmp/
 
 # === 自动生成的图谱数据 ===
 graph/graph.json

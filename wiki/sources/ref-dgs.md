@@ -7,7 +7,7 @@ source_file: raw/papers/arxiv-260307664-8748a994.md
 url: "https://arxiv.org/abs/2603.07664"
 venue: ""
 published: 2026
-links: []
+links: ["https://github.com/njfan/Ref-DGS"]
 ---
 
 ## Summary
@@ -18,6 +18,7 @@ links: []
 
 - 原始文件: [raw/papers/arxiv-260307664-8748a994.md](../../raw/papers/arxiv-260307664-8748a994.md)
 - 原文链接: [https://arxiv.org/abs/2603.07664](https://arxiv.org/abs/2603.07664)
+- 代码: [https://github.com/njfan/Ref-DGS](https://github.com/njfan/Ref-DGS)
 
 ## Key Contributions
 
