@@ -461,8 +461,52 @@ def is_local_path(text: str) -> bool:
 
 
 def process_code(item: dict, out_dir: Path) -> str | None:
-    """Log a git/local item for agent subagent handling (no direct LLM call)."""
+    """Fetch GitHub repo README as source file. Returns saved path or None."""
     link = item["link"]
+
+    # GitHub repo: fetch README.md
+    m = re.match(r'https?://github\.com/([^/]+/[^/]+?)(?:\.git)?/?$', link)
+    if m:
+        repo = m.group(1).rstrip("/").rstrip(".git")
+        today = date.today()
+        file_dir = out_dir / today.isoformat()
+        file_dir.mkdir(parents=True, exist_ok=True)
+        slug = generate_slug(link)
+        out_file = file_dir / f"{slug}.md"
+
+        # Try main, then master branch
+        readme_url = f"https://raw.githubusercontent.com/{repo}/main/README.md"
+        try:
+            resp = requests.get(readme_url, timeout=15)
+            if resp.status_code != 200:
+                readme_url = f"https://raw.githubusercontent.com/{repo}/master/README.md"
+                resp = requests.get(readme_url, timeout=15)
+            resp.raise_for_status()
+        except Exception:
+            print(f"    ⚠️  GitHub README 抓取失败: {link}")
+            return None
+
+        content = resp.text
+        # Build markdown with frontmatter
+        title = repo.split("/")[-1]
+        md = f"""---
+title: "{title}"
+type: source
+tags: [project, code]
+date: {today.isoformat()}
+url: "{link}"
+code_url: "{link}"
+---
+
+# {repo}
+
+{content}
+"""
+        out_file.write_text(md, encoding="utf-8")
+        print(f"    ✓ README → {out_file.relative_to(REPO_ROOT)}")
+        return out_file
+
+    # Non-GitHub git URL or local path: log for agent subagent handling
     return None
 
 
@@ -782,6 +826,27 @@ def scan_and_convert_local_files() -> list[str]:
 
 
 # ─── Main ───────────────────────────────────────────────────────────
+
+
+def _arxiv_content_ok(content: str) -> tuple[bool, str]:
+    """Validate arxiv2md output is complete. Returns (ok, reason)."""
+    MIN_BYTES = 5000
+    if len(content) < MIN_BYTES:
+        return False, f"内容过短 ({len(content)} bytes, 阈值 {MIN_BYTES})"
+    # Must contain Abstract, Introduction, or a numbered section
+    if not re.search(r'^##\s+(Abstract|摘要|Introduction|1\.?\s|\d+\.)', content, re.MULTILINE):
+        # Also check for YAML + non-appendix heading
+        has_main = re.search(r'(?<!Appendix\b)[Aa]bstract|\\section\{', content)
+        if not has_main:
+            return False, "缺少正文关键章节（Abstract/Introduction/1.）"
+    # If only Appendix content, reject
+    appendix_only = re.findall(r'^##\s+Appendix', content, re.MULTILINE)
+    has_main_section = re.search(r'^##\s+(Abstract|摘要|Introduction|1\.?\s)', content, re.MULTILINE)
+    if len(appendix_only) >= 1 and not has_main_section:
+        return False, "仅包含 Appendix，正文缺失"
+    return True, ""
+
+
 def process_link(item: dict, out_dir: Path) -> str:
     """Process a single link and save to out_dir. Return saved file path."""
     item_type = item["type"]
@@ -816,6 +881,13 @@ def process_link(item: dict, out_dir: Path) -> str:
                 content = f"---\n{related_block}---\n{content}"
         out_file.write_text(content, encoding="utf-8")
 
+        # Validate arxiv content quality
+        ok, reason = _arxiv_content_ok(content)
+        if not ok:
+            if out_file.exists():
+                out_file.unlink()
+            raise ValueError(f"arXiv {arxiv_id}: {reason}")
+
         return out_file
     else:
         content = page_to_markdown(link)
@@ -835,27 +907,47 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
     if items:
 
         out_dir = INBOX_DIR
-        failed_count = 0
+        failed_raw: dict[str, str] = {}   # raw_line.strip() → error message
+        success_raw: set[str] = set()     # raw_line.strip() of saved items
         for item in items:
+            raw = item["raw"].strip()
             try:
                 saved_file = process_link(item, out_dir)
                 if saved_file is not None:
                     saved.append(str(saved_file.relative_to(REPO_ROOT)))
+                    success_raw.add(raw)
+                # git/local returns None — keep line in inbox.md
             except Exception as e:
                 print(f"    FAILED: {e}")
-                failed_count += 1
+                failed_raw[raw] = str(e)
 
-        # 只在全部成功时清理 inbox.md，失败项保留以支持重试
-        if not process_only and failed_count == 0:
-            content = INBOX_MD.read_text(encoding="utf-8")
-            content = re.sub(r'^\s*[-*]\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE)
-            content = re.sub(r'^\s*[-*]\s*git@[\w.-]+:\S+\s*\n?', '', content, flags=re.MULTILINE)
-            content = re.sub(r'^\s*[-*]\s*\d{4}\.\d{4,5}[^\n]*\n?', '', content, flags=re.MULTILINE)
-            content = re.sub(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+\s*\n?', '', content, flags=re.MULTILINE)
-            content = re.sub(r'\n{3,}', '\n\n', content)
-            INBOX_MD.write_text(content, encoding="utf-8")
-        elif failed_count > 0:
-            print(f"  ⏭️  跳过 inbox.md 清理（{failed_count} 个链接处理失败）")
+        if not process_only:
+            if failed_raw:
+                # Line-by-line: remove successes, mark failures with ⚠️
+                content = INBOX_MD.read_text(encoding="utf-8")
+                new_lines = []
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped in success_raw:
+                        continue  # remove from inbox
+                    if stripped in failed_raw:
+                        indent = re.match(r'^(\s*)', line).group(1)
+                        body = stripped.lstrip("-* ").strip()
+                        new_lines.append(f"{indent}- ⚠️ {body}  # {failed_raw[stripped]}")
+                    else:
+                        new_lines.append(line)
+                content = re.sub(r'\n{3,}', '\n\n', "\n".join(new_lines)).strip()
+                INBOX_MD.write_text(content + "\n", encoding="utf-8")
+                print(f"  ⏭️  {len(failed_raw)} 个链接下载异常，已在 inbox.md 中标记 ⚠️")
+            else:
+                # All clean: regex sweep
+                content = INBOX_MD.read_text(encoding="utf-8")
+                content = re.sub(r'^\s*[-*]\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE)
+                content = re.sub(r'^\s*[-*]\s*git@[\w.-]+:\S+\s*\n?', '', content, flags=re.MULTILINE)
+                content = re.sub(r'^\s*[-*]\s*\d{4}\.\d{4,5}[^\n]*\n?', '', content, flags=re.MULTILINE)
+                content = re.sub(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+\s*\n?', '', content, flags=re.MULTILINE)
+                content = re.sub(r'\n{3,}', '\n\n', content).strip()
+                INBOX_MD.write_text(content + "\n", encoding="utf-8")
 
     # ── Step 2: local files ──
     if not no_scan:
