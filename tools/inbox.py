@@ -904,9 +904,27 @@ def process_link(item: dict, out_dir: Path) -> str:
         # Validate arxiv content quality
         ok, reason = _arxiv_content_ok(content)
         if not ok:
-            if out_file.exists():
-                out_file.unlink()
-            raise ValueError(f"arXiv {arxiv_id}: {reason}")
+            # 内容不达标：写占位文件，标记 agent_action 让 agent 用 alphaXiv MCP 补充
+            agent_md = f"""---
+title: "arXiv {arxiv_id} (下载异常)"
+url: "https://arxiv.org/abs/{arxiv_id}"
+agent_action: fetch_alphaxiv
+agent_note: "{reason}"
+---
+
+# arXiv: {arxiv_id}
+
+> ⚠️ arxiv2md/pdf2md 均未能获取完整内容。
+> 原因：{reason}
+> 需要 agent 调用 alphaxiv_get_paper_content 补充全文。
+
+## 原始链接
+
+- https://arxiv.org/abs/{arxiv_id}
+"""
+            out_file.write_text(agent_md, encoding="utf-8")
+            print(f"  ⚠️  {arxiv_id}: {reason} → 已标记 agent_action: fetch_alphaxiv")
+            return out_file
 
         return out_file
     else:
