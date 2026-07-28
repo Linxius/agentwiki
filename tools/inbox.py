@@ -616,8 +616,27 @@ def _fetch_arxiv_api(arxiv_id: str) -> str:
         if cache_dir.exists():
             shutil.rmtree(cache_dir, ignore_errors=True)
 
-    # alphaXiv overview HTTP 暂时不用，失败走 agent_action: fetch_alphaxiv
-    # URL: https://www.alphaxiv.org/overview/{arxiv_id}.md
+    # alphaXiv overview HTTP 兜底（AI 生成的结构化报告）
+    alphaxiv_url = f"https://www.alphaxiv.org/overview/{arxiv_id}.md"
+    try:
+        resp = requests.get(alphaxiv_url, timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200 and len(resp.text) > 5000:
+            content = resp.text
+            title_line = content.split("\n")[0].strip() if content else ""
+            title = title_line.lstrip("# ").strip() if title_line else f"arXiv {arxiv_id}"
+            return f"""---
+title: "{title}"
+url: "https://arxiv.org/abs/{arxiv_id}"
+source: "alphaxiv overview"
+---
+
+{content}
+"""
+    except Exception:
+        pass
+
+    # 仍失败 → 返回空，process_link 写 agent_action: fetch_alphaxiv 由 MCP 补充
     return ""
 
 
