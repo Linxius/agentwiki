@@ -835,6 +835,7 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
     if items:
 
         out_dir = INBOX_DIR
+        failed_count = 0
         for item in items:
             try:
                 saved_file = process_link(item, out_dir)
@@ -842,8 +843,10 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
                     saved.append(str(saved_file.relative_to(REPO_ROOT)))
             except Exception as e:
                 print(f"    FAILED: {e}")
+                failed_count += 1
 
-        if not process_only:
+        # 只在全部成功时清理 inbox.md，失败项保留以支持重试
+        if not process_only and failed_count == 0:
             content = INBOX_MD.read_text(encoding="utf-8")
             content = re.sub(r'^\s*[-*]\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE)
             content = re.sub(r'^\s*[-*]\s*git@[\w.-]+:\S+\s*\n?', '', content, flags=re.MULTILINE)
@@ -851,6 +854,8 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
             content = re.sub(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+\s*\n?', '', content, flags=re.MULTILINE)
             content = re.sub(r'\n{3,}', '\n\n', content)
             INBOX_MD.write_text(content, encoding="utf-8")
+        elif failed_count > 0:
+            print(f"  ⏭️  跳过 inbox.md 清理（{failed_count} 个链接处理失败）")
 
     # ── Step 2: local files ──
     if not no_scan:
