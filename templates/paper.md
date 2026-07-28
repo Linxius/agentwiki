@@ -18,6 +18,8 @@ links: []          # 代码或项目链接
 ## 原始出处
 - 原始文件: [{source_file}](../../{source_file})
 - 原文链接: [{url}]({url})
+- Brief 条目: [brief.md 日期 > 标题](brief-path)
+- 深度阅读报告: [deepdive 报告](deepdive-path)
 
 ## Key Contributions
 - Contribution 1
@@ -62,6 +64,11 @@ links: []          # 代码或项目链接
 
 ## Limitations
 论文自述的局限性，或 reviewer 指出的问题。
+
+## 评论与启示
+- 个人见解、启发性思考、与其他工作的关联
+- 实践心得、未来方向建议
+- 评论来源：来自深度阅读报告 / 用户手动添加 / brief 评论
 
 ## Connections
 - [[EntityName]] — how they relate

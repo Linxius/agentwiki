@@ -48,7 +48,7 @@ GRAPH_HTML = GRAPH_DIR / "graph.html"
 CACHE_FILE = GRAPH_DIR / ".cache.json"
 INFERRED_EDGES_FILE = GRAPH_DIR / ".inferred_edges.jsonl"
 LOG_FILE = WIKI_DIR / "log.md"
-SCHEMA_FILE = REPO_ROOT / "CLAUDE.md"
+SCHEMA_FILE = REPO_ROOT / "AGENTS.md"
 
 # Node type → color mapping
 TYPE_COLORS = {

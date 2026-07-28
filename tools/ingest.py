@@ -9,6 +9,7 @@ Usage:
     python tools/ingest.py slides.pptx notes.docx       # batch, mixed formats
     python tools/ingest.py raw/mixed/ --no-convert      # skip auto-conversion
     python tools/ingest.py --validate-only              # run validation only
+    python tools/ingest.py --paper <arxiv-id-or-url>    # direct paper ingest (skip inbox)
     python tools/ingest.py --phase1                     # write prompts to files for subagent
     python tools/ingest.py --phase2                     # read results from subagent
 
@@ -45,7 +46,8 @@ from datetime import date
 from _utils import (read_file, write_file, call_llm, sha256,
                     parse_json_from_response, inject_source_url,
                     extract_wikilinks, all_wiki_pages,
-                    prepare_tasks, read_results, clean_task_dirs, TASK_DIR)
+                    prepare_tasks, read_results, clean_task_dirs, TASK_DIR,
+                    rename_file_by_title)
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
@@ -124,23 +126,33 @@ def build_wiki_context() -> str:
     return "\n\n---\n\n".join(parts)
 
 
-_SHARED_CONTEXT_PATH: Path | None = None  # module-level cache, set once per process
+_SHARED_CONTEXT_FILE = "wiki-ingest-context.md"
+_SHARED_CACHE_MARKER = "wiki-ingest-context.last"  # timestamp marker
 
 
 def get_shared_ingest_context() -> Path | None:
     """Write shared schema + wiki context to a file subagents can read independently.
-    Returns the path, or None if writing fails. Module-level cache: writes once per process.
+    Returns the path, or None if writing fails. 
     
-    The file is written to raw/.tmp/wiki-ingest-context.md so subagents can read it
-    with the 'read' tool instead of receiving the ~68KB schema inline in every prompt.
+    Cache is invalidated when prepare_tasks() is called (checked via marker file mtime).
     """
     global _SHARED_CONTEXT_PATH
-    if _SHARED_CONTEXT_PATH and _SHARED_CONTEXT_PATH.exists():
-        return _SHARED_CONTEXT_PATH
-
     shared_dir = REPO_ROOT / "raw" / ".tmp"
+    shared_path = shared_dir / _SHARED_CONTEXT_FILE
+    marker_file = shared_dir / _SHARED_CACHE_MARKER
+    
+    # Check if cache is still valid: for current process, keep using it (module-level cache)
+    if _SHARED_CONTEXT_PATH and _SHARED_CONTEXT_PATH.exists():
+        # But also check if prepare_tasks() was called since cache was built
+        if marker_file.exists() and _SHARED_CONTEXT_PATH.exists():
+            cache_mtime = _SHARED_CONTEXT_PATH.stat().st_mtime
+            marker_mtime = marker_file.stat().st_mtime
+            if marker_mtime <= cache_mtime:
+                return _SHARED_CONTEXT_PATH
+        else:
+            return _SHARED_CONTEXT_PATH
+
     shared_dir.mkdir(parents=True, exist_ok=True)
-    shared_path = shared_dir / "wiki-ingest-context.md"
     
     schema = read_file(SCHEMA_FILE)
     wiki_context = build_wiki_context()
@@ -587,11 +599,18 @@ def copy_referenced_images(report_content, slug, tmp_image_dir):
 
 def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
                         url_instruction, today, source_content,
-                        img_prompt_section, shared_context_path: str = ""):
+                        img_prompt_section, shared_context_path: str = "",
+                        comments: str = "", deepdive_path: str = "",
+                        brief_entry_ref: str = ""):
     """Build the LLM prompt for ingesting a source document.
     
     When shared_context_path is set, the subagent reads schema + wiki context
     from that file instead of receiving it inline (saves ~68KB per task).
+    
+    Args:
+        comments: User/agent comments/insights to incorporate into wiki
+        deepdive_path: Path to deep-read report for this entry
+        brief_entry_ref: Brief.md entry reference (date + title)
     """
     context_section = (
         f"Read shared wiki context from `{shared_context_path}` "
@@ -599,6 +618,23 @@ def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
         if shared_context_path
         else "(wiki is empty — this is the first source)"
     )
+    
+    # Comments/insights section (optional)
+    comments_section = ""
+    if comments or deepdive_path or brief_entry_ref:
+        parts = ["\n---\n### 补充信息（必须合入 wiki）"]
+        if brief_entry_ref:
+            parts.append(f"- Brief 条目引用: {brief_entry_ref}")
+        if deepdive_path:
+            parts.append(f"- 深度阅读报告: [{deepdive_path}]({deepdive_path})")
+        if comments:
+            parts.append(f"- 评论/启示: {comments}")
+        parts.append(
+            "\n请将以上评论和启示整合到 wiki 页面的 `## 评论与启示` 章节中。"
+            "使用 `os.path.relpath()` 计算所有链接的相对路径。"
+        )
+        comments_section = "\n".join(parts)
+    
     return f"""You are maintaining an LLM Wiki. Process this source document and integrate its knowledge into the wiki.
 
 Schema and conventions:
@@ -608,6 +644,7 @@ New source to ingest (file: {source_file_repo}):
 source_file (repo-relative): {source_file_repo}
 raw_relative_path: {raw_relative_path} (use this path from wiki/sources/<slug>.md to the raw file in the "## 原始出处" section)
 source_url: {source_url_display}
+{comments_section}
 
 === SOURCE START ===
 {source_content}
@@ -622,6 +659,8 @@ IMPORTANT source_page instructions:
 - Include a "## 原始出处" section after Summary with:
   - 原始文件: [{source_file_repo}]({raw_relative_path}) — relative link to raw file
   - 原文链接: [{{url}}]({{url}}) — original source URL (if available)
+  - Brief 条目: [{brief_entry_ref or 'brief.md'}](brief_entry_ref) — if available
+  - 深度阅读报告: [{deepdive_path or 'N/A'}]({deepdive_path}) — if available
 {img_prompt_section}
 Return ONLY a valid JSON object with these fields (no markdown fences, no prose outside the JSON):
 {{
@@ -642,7 +681,9 @@ Return ONLY a valid JSON object with these fields (no markdown fences, no prose 
 """
 
 
-def ingest(source_path: str, auto_convert: bool = True):
+def ingest(source_path: str, auto_convert: bool = True,
+           comments: str = "", deepdive_path: str = "",
+           brief_entry_ref: str = ""):
     source = Path(source_path).resolve()
     if not source.exists():
         print(f"Error: file not found: {source_path}")
@@ -722,6 +763,8 @@ def ingest(source_path: str, auto_convert: bool = True):
         source_file_repo, raw_relative_path, source_url_display,
         url_instruction, today, source_content,
         img_prompt_section, shared_context_path=shared_ctx_arg,
+        comments=comments, deepdive_path=deepdive_path,
+        brief_entry_ref=brief_entry_ref,
     )
 
     # ── Phase 1: write prompt to file for subagent ──
@@ -748,9 +791,12 @@ def ingest(source_path: str, auto_convert: bool = True):
             print(f"Error: no result found for {task_id}")
             sys.exit(1)
     else:
-        # Default mode: direct LLM call
-        print(f"  calling API (model: ...)")
+        # Default mode: auto-convert to phase1 (writes task file)
+        print(f"  📤 自动转为 phase1 模式（创建 task 文件）")
         raw = call_llm(prompt, max_tokens=8192)
+        if not raw:
+            print(f"  Task 已创建。请运行 --phase2 完成 ingest。")
+            return
 
     try:
         data = parse_json_from_response(raw)
@@ -842,12 +888,16 @@ def ingest(source_path: str, auto_convert: bool = True):
 
 def _parse_entry_from_brief(lines: list[str], start_i: int, entry_lines: list[str]) -> dict:
     """Parse a single brief.md entry into a structured dict."""
-    entry = {'title': '', 'source_url': '', 'domain': '', 'keywords': '', 'source_file': ''}
+    entry = {'title': '', 'source_url': '', 'domain': '', 'keywords': '', 'source_file': '',
+             'comments': '', 'detailed_report': ''}
     title_line = lines[start_i]
     if title_line.startswith('#### '):
         entry['title'] = title_line[5:].strip()
     elif title_line.startswith('### '):
         entry['title'] = title_line[4:].strip()
+    
+    entry_text = '\n'.join(entry_lines)
+    
     for el in entry_lines:
         m = re.match(r'- 来源:\s*(.*)', el)
         if m:
@@ -861,6 +911,25 @@ def _parse_entry_from_brief(lines: list[str], start_i: int, entry_lines: list[st
         m = re.match(r'- 源文件:\s*\[([^\]]+)\]', el)
         if m:
             entry['source_file'] = m.group(1).strip()
+    
+    # Extract detailed report / comments
+    detailed_match = re.search(r'\*\*详细报告\*\*\s*[:：]?\s*(.+?)(?=\n\n|\n###|\n####|$)', entry_text, re.DOTALL)
+    if detailed_match:
+        entry['detailed_report'] = detailed_match.group(1).strip()
+    
+    # Extract any user-written comments (lines after detailed report, before next entry)
+    # These are free-text comments/notes the user wrote
+    if entry['detailed_report']:
+        rest = entry_text.split(detailed_match.group(0), 1)[-1].strip()
+        # Skip URLs, empty lines, and markdown formatting
+        user_lines = []
+        for line in rest.split('\n'):
+            line = line.strip()
+            if line and not line.startswith('![') and not line.startswith('https://') and not line.startswith('- 源'):
+                user_lines.append(line)
+        if user_lines:
+            entry['comments'] = ' '.join(user_lines)
+    
     return entry
 
 
@@ -911,6 +980,32 @@ def _group_entries_for_merge(entries: list[dict]) -> list[list[dict]]:
     return groups
 
 
+def _find_deepdive_for_entry(entry: dict, brief_date: str | None) -> str:
+    """Find deep-read report for a brief entry. Returns relpath string or empty string."""
+    if not brief_date:
+        return ""
+    title = entry.get('title', '')
+    if not title:
+        return ""
+    safe_title = ''.join(c if c.isalnum() or c in '-_' else '_' for c in title)
+    slug = safe_title.lower().replace('__', '-').replace('_', '-')
+    
+    # Search in deepdive directories
+    deepdive_base = REPO_ROOT / "raw" / "digest" / "deepdive"
+    if not deepdive_base.exists():
+        return ""
+    
+    for d in sorted(deepdive_base.iterdir(), reverse=True):
+        if not d.is_dir():
+            continue
+        candidate = d / f"{slug}.md"
+        if candidate.exists():
+            rel = os.path.relpath(str(candidate), str(REPO_ROOT)).replace('\\', '/')
+            return rel
+    
+    return ""
+    
+    
 def _combine_source_files(file_paths: list[Path]) -> Path | None:
     """Combine multiple source files into one temp file with section headers."""
     combined_parts = []
@@ -1107,7 +1202,18 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                 if urls:
                     inject_source_url(dest_path, urls[0])
                 
-                ingest(str(dest_path), auto_convert=True)
+                # Collect comments from all merged entries
+                comments = '; '.join([e.get('comments', '') for e in group if e.get('comments')])
+                
+                # Find deepdive report path
+                deepdive_path = _find_deepdive_for_entry(group[0], brief_date)
+                
+                # Build brief entry reference
+                brief_ref = f"brief.md {brief_date} > {group[0].get('title', '')}"
+                
+                ingest(str(dest_path), auto_convert=True,
+                       comments=comments, deepdive_path=deepdive_path,
+                       brief_entry_ref=brief_ref)
         else:
             # ── Single entry ──
             entry = group[0]
@@ -1131,8 +1237,15 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             else:
                 print(f"  ⚠️  无 source_url，跳过 URL 注入")
             
+            # Collect comments and deepdive reference
+            comments = entry.get('comments', '')
+            deepdive_path = _find_deepdive_for_entry(entry, brief_date)
+            brief_ref = f"brief.md {brief_date} > {entry.get('title', '')}"
+            
             try:
-                ingest(str(dest_path), auto_convert=True)
+                ingest(str(dest_path), auto_convert=True,
+                       comments=comments, deepdive_path=deepdive_path,
+                       brief_entry_ref=brief_ref)
                 # Only remove source after successful ingest
                 file_path.unlink()
                 print(f"  🧹 已清理 sources/ 中的原始文件: {file_path.name}")
@@ -1141,6 +1254,203 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                 raise
     
     print("\n✅ 合入完成！")
+
+
+# ── arXiv patterns (shared with deep-read.py) ──
+ARXIV_PATTERNS = [
+    re.compile(r"arxiv\.org/abs/(\d{4}\.\d{4,5})(v\d+)?"),
+    re.compile(r"arxiv\.org/pdf/(\d{4}\.\d{4,5})(v\d+)?"),
+    re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?$"),
+]
+
+
+def extract_arxiv_id(text: str) -> str | None:
+    for p in ARXIV_PATTERNS:
+        m = p.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
+    """Fetch arXiv paper content via arxiv2md."""
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    out_file = tmp_dir / f"arxiv-{arxiv_id}.md"
+    if out_file.exists():
+        for f in tmp_dir.iterdir():
+            if f.suffix == '.md' and f.stem != out_file.stem and arxiv_id not in f.stem:
+                return f
+        return out_file
+
+    try:
+        from arxiv2md import ingest_paper_sync
+        result = ingest_paper_sync(arxiv_id)
+        import re as _re
+        content = _re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
+        out_file.write_text(content, encoding="utf-8")
+        renamed = rename_file_by_title(out_file)
+        return renamed
+    except ImportError:
+        pass
+    finally:
+        cache_dir = REPO_ROOT / ".arxiv2md_cache"
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir, ignore_errors=True)
+
+    # Fallback: fetch abstract from arXiv API
+    try:
+        import requests as _req
+        url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
+        resp = _req.get(url, timeout=30)
+        resp.raise_for_status()
+        import xml.etree.ElementTree as ET
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        root = ET.fromstring(resp.content)
+        entry = root.find("atom:entry", ns)
+        if entry is not None:
+            title = entry.find("atom:title", ns).text.strip().replace("\n", " ").replace("  ", " ")
+            summary = entry.find("atom:summary", ns).text.strip().replace("\n", " ").replace("  ", " ")
+            content = f"""# {title}
+
+**arXiv**: https://arxiv.org/abs/{arxiv_id}
+
+**Abstract**:
+{summary}
+"""
+            out_file.write_text(content, encoding="utf-8")
+            renamed = rename_file_by_title(out_file)
+            return renamed
+    except Exception:
+        pass
+
+    out_file.write_text(f"# arXiv: {arxiv_id}\n\n[Unable to fetch content]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}\n", encoding="utf-8")
+    out_file_renamed = rename_file_by_title(out_file)
+    return out_file_renamed
+
+
+def _refetch_web(url: str, tmp_dir: Path) -> Path | None:
+    """Fetch web page content."""
+    import hashlib
+    slug = hashlib.md5(url.encode()).hexdigest()[:12]
+    out_file = tmp_dir / f"web-{slug}.md"
+    if out_file.exists():
+        return out_file
+
+    try:
+        import requests as _req
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = _req.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = resp.apparent_encoding or 'utf-8'
+
+        title = ""
+        m = re.search(r"<title>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+        if m:
+            title = m.group(1).strip()
+
+        try:
+            import trafilatura
+            md = trafilatura.extract(resp.text, include_comments=False, include_tables=True) or ""
+        except ImportError:
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, "html.parser")
+                md = soup.get_text(separator="\n", strip=True)
+            except ImportError:
+                md = resp.text[:10000]
+
+        content = f"# {title or 'Untitled'}\n\n{md}\n\n原始链接: {url}\n"
+        out_file.write_text(content, encoding="utf-8")
+        if title:
+            renamed = rename_file_by_title(out_file)
+            return renamed
+        return out_file
+    except Exception as e:
+        out_file.write_text(f"# Error: {url}\n\n{e}\n", encoding="utf-8")
+        return out_file
+
+
+def run_direct_ingest(paper_input: str):
+    """Direct ingest: fetch paper from arxiv/PDF/web URL, then ingest into wiki.
+    
+    Skips inbox/filter/deep-read stages entirely.
+    """
+    today = date.today().isoformat()
+    tmp_base = REPO_ROOT / "raw" / ".tmp" / "direct-ingest"
+    tmp_dir = tmp_base / today
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Detect input type
+    arxiv_id = extract_arxiv_id(paper_input)
+    is_pdf = paper_input.lower().endswith('.pdf')
+    is_url = paper_input.startswith('http')
+
+    if arxiv_id:
+        print(f"📄 arXiv paper: {arxiv_id}")
+        file_path = _refetch_arxiv(arxiv_id, tmp_dir)
+        source_url = f"https://arxiv.org/abs/{arxiv_id}"
+    elif is_pdf:
+        print(f"📄 PDF file: {paper_input}")
+        pdf_path = Path(paper_input).resolve()
+        if not pdf_path.exists():
+            print(f"❌ PDF not found: {pdf_path}")
+            return
+        import subprocess
+        pdf2md_path = REPO_ROOT / "tools" / "pdf2md.py"
+        result = subprocess.run(
+            [sys.executable, str(pdf2md_path), str(pdf_path)],
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode != 0:
+            print(f"❌ pdf2md failed: {result.stderr}")
+            return
+        # Find generated md
+        output_dir = pdf_path.parent / pdf_path.stem
+        file_path = None
+        if output_dir.exists():
+            for f in output_dir.rglob("*.md"):
+                if f.name != pdf_path.stem:
+                    continue
+                file_path = f
+                break
+        if not file_path:
+            # fallback: search for any md
+            for f in pdf_path.parent.rglob("*.md"):
+                if f.stem == pdf_path.stem:
+                    file_path = f
+                    break
+        if not file_path or not file_path.exists():
+            print(f"❌ pdf2md did not produce output for {pdf_path.name}")
+            return
+        source_url = str(pdf_path)
+    elif is_url:
+        print(f"🌐 Web page: {paper_input}")
+        file_path = _refetch_web(paper_input, tmp_dir)
+        source_url = paper_input
+    else:
+        print(f"❌ Unrecognized input: {paper_input}")
+        print("   Supported: arxiv URL/ID, PDF path, or web URL")
+        return
+
+    if not file_path or not file_path.exists():
+        print(f"❌ Failed to fetch/convert content")
+        return
+
+    # Copy to raw/papers/ for persistent storage
+    dest_dir = REPO_ROOT / "raw" / "papers"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / file_path.name
+    shutil.copy2(str(file_path), str(dest_path))
+    print(f"  → 保存到: {dest_path.relative_to(REPO_ROOT)}")
+
+    # Inject source URL into frontmatter
+    inject_source_url(dest_path, source_url)
+
+    # Ingest directly
+    print(f"\n{'='*50}")
+    print(f"  开始直接合入 wiki...")
+    print(f"{'='*50}")
+    ingest(str(dest_path), auto_convert=True)
 
 
 if __name__ == "__main__":
@@ -1178,7 +1488,20 @@ if __name__ == "__main__":
     # Parse flags
     no_convert = "--no-convert" in sys.argv
     from_digest = "--from-digest" in sys.argv
+    direct_paper = "--paper" in sys.argv
     date_str = None
+    
+    # Handle --paper mode
+    if direct_paper:
+        paper_idx = sys.argv.index("--paper")
+        if paper_idx + 1 < len(sys.argv):
+            paper_input = sys.argv[paper_idx + 1]
+            print(f"Direct paper ingest: {paper_input}")
+            run_direct_ingest(paper_input)
+            sys.exit(0)
+        else:
+            print("Error: --paper requires a URL, arxiv ID, or path argument")
+            sys.exit(1)
     
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     for i, arg in enumerate(sys.argv[1:]):
@@ -1194,10 +1517,11 @@ if __name__ == "__main__":
         run_from_digest(date_str, auto_yes=auto_yes)
         sys.exit(0)
     
-    if not args:
+    if not args and not from_digest and not direct_paper:
         print("Usage: python tools/ingest.py <path-to-source> [path2 ...] [dir1 ...]")
         print("       python tools/ingest.py --validate-only")
         print("       python tools/ingest.py --from-digest [YYYY-MM-DD]  # ingest from digest brief")
+        print("       python tools/ingest.py --paper <arxiv-id-or-url>   # direct paper ingest")
         print("       python tools/ingest.py --no-convert  # skip auto-conversion of non-.md files")
         print("       python tools/ingest.py --phase1  # write prompts to files for subagent processing")
         print("       python tools/ingest.py --phase2  # read results from subagent processing")

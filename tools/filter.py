@@ -50,6 +50,73 @@ LOG_FILE = REPO_ROOT / "wiki" / "log.md"
 FILTER_CACHE = DIGEST_DIR / ".filter-cache.json"
 
 
+def _apply_suggestions(suggested_interests, suggested_disinterests, log_fn=print):
+    """Apply filter suggestions to interests.md.
+    Appends new items under the appropriate section.
+    """
+    if not suggested_interests and not suggested_disinterests:
+        return
+    content = read_file(INTERESTS_FILE)
+    if not content:
+        content = "# 兴趣点\n\n## 兴趣列表\n\n## 排除列表\n"
+    
+    lines = content.split('\n')
+    new_lines = list(lines)
+    insertions = 0
+    
+    for si in suggested_interests:
+        name = si if isinstance(si, str) else si.get("name", "")
+        if not name:
+            continue
+        kw_str = name if isinstance(si, str) else ", ".join(si.get("keywords", []))
+        if any(name in l for l in lines):
+            log_fn(f"  ⏭️  兴趣已存在: {name}")
+            continue
+        inserted = False
+        for i, line in enumerate(new_lines):
+            if line.strip() == "## 兴趣列表":
+                insert_at = i + 1
+                while insert_at < len(new_lines) and new_lines[insert_at].strip() == "":
+                    insert_at += 1
+                new_lines.insert(insert_at, f"- {name} [{kw_str}]")
+                insertions += 1
+                inserted = True
+                log_fn(f"  + 兴趣点: {name} [{kw_str}]")
+                break
+        if not inserted:
+            new_lines.append(f"- {name} [{kw_str}]")
+            insertions += 1
+    
+    for sd in suggested_disinterests:
+        name = sd if isinstance(sd, str) else sd.get("name", "")
+        if not name:
+            continue
+        kw_str = name if isinstance(sd, str) else ", ".join(sd.get("keywords", []))
+        if any(name in l for l in lines):
+            log_fn(f"  ⏭️  排除项已存在: {name}")
+            continue
+        inserted = False
+        for i, line in enumerate(new_lines):
+            if line.strip() == "## 排除列表":
+                insert_at = i + 1
+                while insert_at < len(new_lines) and new_lines[insert_at].strip() == "":
+                    insert_at += 1
+                new_lines.insert(insert_at, f"- {name} [{kw_str}]")
+                insertions += 1
+                inserted = True
+                log_fn(f"  + 排除项: {name} [{kw_str}]")
+                break
+        if not inserted:
+            new_lines.append(f"- {name} [{kw_str}]")
+            insertions += 1
+    
+    if insertions > 0:
+        write_file(INTERESTS_FILE, '\n'.join(new_lines))
+        log_fn(f"✅ 已合入 {insertions} 个新条目到 interests.md")
+    else:
+        log_fn("  无新条目需要合入。")
+
+
 def parse_interests(content: str) -> list[dict]:
     """Parse interests/disinterests from wiki/interests.md content.
 
@@ -636,23 +703,40 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
 
 
 def archive_current_brief():
-    """Archive current brief.md to digest/brief/YYYY-MM-DD.md if it exists."""
-    today = date.today().isoformat()
-    if BRIEF_FILE.exists():
-        archive_path = BRIEF_DIR / f"{today}.md"
-        if archive_path.exists():
-            # Append to existing archive
-            existing = read_file(BRIEF_FILE)
-            archive_content = read_file(archive_path)
-            archive_content += "\n\n---\n\n" + existing + f"\n\n**归档于: {today}**"
-            write_file(archive_path, archive_content)
-        else:
-            shutil.copy2(str(BRIEF_FILE), str(archive_path))
+    """Archive current brief.md to digest/brief/YYYY-MM-DD.md if it exists.
+    Uses the date from the brief.md header (e.g. '# 资讯简报  2026-07-28')
+    rather than date.today(), so archive filenames match the brief's actual date.
+    """
+    if not BRIEF_FILE.exists():
+        return
+    
+    # Extract date from brief.md header
+    content = read_file(BRIEF_FILE)
+    date_match = re.search(r'# .*?(\d{4}-\d{2}-\d{2})', content)
+    today = date_match.group(1) if date_match else date.today().isoformat()
+    
+    archive_path = BRIEF_DIR / f"{today}.md"
+    if archive_path.exists():
+        existing = read_file(BRIEF_FILE)
+        archive_content = read_file(archive_path)
+        archive_content += "\n\n---\n\n" + existing + f"\n\n**归档于: {today}**"
+        write_file(archive_path, archive_content)
+    else:
+        shutil.copy2(str(BRIEF_FILE), str(archive_path))
 
 
 def generate_new_brief():
-    """After archiving, create a minimal brief.md placeholder for today."""
+    """After archiving, create a minimal brief.md placeholder for today.
+    Uses the same date from the archived brief if available.
+    """
+    # Try to get date from archived brief
     today = date.today().isoformat()
+    if BRIEF_DIR.exists():
+        archives = sorted(BRIEF_DIR.glob("*.md"))
+        if archives:
+            m = re.search(r'(\d{4}-\d{2}-\d{2})', archives[-1].stem)
+            if m:
+                today = m.group(1)
     content = f"""# 资讯简报
 
 ---
@@ -902,6 +986,10 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
             kw = name if isinstance(sd, str) else ", ".join(sd.get("keywords", []))
             weight = "0.9" if isinstance(sd, str) else str(sd.get("weight", 0.9))
             print(f"  - {name} (权重: {weight}) [{kw}]")
+
+    # Auto-apply suggestions if --apply-suggestions
+    if '--apply-suggestions' in sys.argv and (suggested_interests or suggested_disinterests):
+        _apply_suggestions(suggested_interests, suggested_disinterests, log=print)
 
     # Log
     brief_count = len([r for r in results if r["match_level"] != "not_interested"])
@@ -1257,6 +1345,8 @@ if __name__ == "__main__":
     parser.add_argument("--phase2", action="store_true", help="Read results from subagent processing")
     parser.add_argument("--build-brief", type=str, metavar="RESULTS_JSON",
                         help="Build brief.md from pre-analyzed results JSON (skip LLM, do file mgmt)")
+    parser.add_argument("--apply-suggestions", action="store_true",
+                        help="Auto-apply suggested interests/disinterests to interests.md")
     args = parser.parse_args()
 
     if args.clear_cache:

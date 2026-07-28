@@ -27,7 +27,7 @@ REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
 INDEX_FILE = WIKI_DIR / "index.md"
 LOG_FILE = WIKI_DIR / "log.md"
-SCHEMA_FILE = REPO_ROOT / "CLAUDE.md"
+SCHEMA_FILE = REPO_ROOT / "AGENTS.md"
 
 
 def find_relevant_pages(question: str, index_content: str) -> list[Path]:

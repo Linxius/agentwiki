@@ -32,7 +32,7 @@ from datetime import date
 from collections import defaultdict
 import os
 
-from _utils import read_file, write_file, call_llm, prepare_tasks, read_results, clean_task_dirs, TASK_DIR
+from _utils import read_file, write_file, call_llm, prepare_tasks, read_results, clean_task_dirs, TASK_DIR, rename_file_by_title
 
 REPO_ROOT = Path(__file__).parent.parent
 DAILY_DIR = REPO_ROOT / "raw" / "digest"
@@ -120,6 +120,10 @@ def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
     """Re-fetch arXiv paper content."""
     out_file = tmp_dir / f"arxiv-{arxiv_id}.md"
     if out_file.exists():
+        # Check if there's already a title-based rename
+        for f in tmp_dir.iterdir():
+            if f.suffix == '.md' and f.stem != out_file.stem and arxiv_id not in f.stem:
+                return f  # already renamed
         return out_file
 
     try:
@@ -127,7 +131,9 @@ def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
         result = ingest_paper_sync(arxiv_id)
         content = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
         out_file.write_text(content, encoding="utf-8")
-        return out_file
+        # Rename to title-based slug for readability
+        renamed = rename_file_by_title(out_file)
+        return renamed
     except ImportError:
         pass
     finally:
@@ -156,12 +162,14 @@ def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
 {summary}
 """
             out_file.write_text(content, encoding="utf-8")
-            return out_file
+            renamed = rename_file_by_title(out_file)
+            return renamed
     except Exception:
         pass
 
     out_file.write_text(f"# arXiv: {arxiv_id}\n\n[Unable to re-fetch content]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}\n", encoding="utf-8")
-    return out_file
+    out_file_renamed = rename_file_by_title(out_file)
+    return out_file_renamed
 
 
 def _refetch_web(url: str, tmp_dir: Path) -> Path | None:
@@ -198,6 +206,9 @@ def _refetch_web(url: str, tmp_dir: Path) -> Path | None:
 
         content = f"# {title or 'Untitled'}\n\n{md}\n\n原始链接: {url}\n"
         out_file.write_text(content, encoding="utf-8")
+        if title:
+            renamed = rename_file_by_title(out_file)
+            return renamed
         return out_file
     except Exception as e:
         out_file.write_text(f"# Error: {url}\n\n{e}\n", encoding="utf-8")
@@ -509,7 +520,9 @@ def generate_disinterest_suggestion(entry: dict) -> dict:
 
 
 def build_deepdive_prompt(file_path: Path, title: str, brief: str,
-                          prefix: str = "", downloaded_images: list = None) -> str:
+                          prefix: str = "", downloaded_images: list = None,
+                          source_url: str = "",
+                          entry_lines: str = "") -> str:
     """Build the prompt for deep-dive report generation."""
     content = read_file(file_path)
     max_chars = int(os.environ.get("WIKI_MAX_CONTENT_CHARS", "20000"))
@@ -517,23 +530,30 @@ def build_deepdive_prompt(file_path: Path, title: str, brief: str,
         content = content[:max_chars]
 
     img_section = ""
+    example_img = ""
     if downloaded_images:
         img_section = build_image_prompt_section(downloaded_images, prefix)
         example_img = f"images/{downloaded_images[0][1]}"
-    else:
-        example_img = ""
 
-    return f"""深度阅读助手。分析文档，生成中文报告。
+    return f"""深度阅读助手。分析文档，生成中文报告，包含完整的元数据区块和方法双重写作。
 
 标题: {title}
 简介: {brief}
+{('来源链接: ' + source_url) if source_url else ''}
 
 === 文档内容 ===
 {content}
 === END ===
 {img_section}
 
-报告结构（严格避免重叠）：
+报告结构要求：
+
+## 元数据（放在报告最开头，使用列表格式）
+- 论文标题: {title}
+- 原始链接: [{'arXiv: ' + source_url.split('/abs/')[-1] if '/abs/' in source_url else source_url}]({source_url})（如有）
+- 项目主页:（从文档中提取，如无可留空）
+- 代码仓库:（从文档中提取，如无可留空）
+- 对应 brief 条目: 来自 {BRIEF_FILE.name}，日期 {prefix.split('_')[0] if '_' in prefix else '?'}
 
 ## 论文概览（仅背景、贡献和指标，不要涉及方法细节）
 
@@ -542,33 +562,59 @@ def build_deepdive_prompt(file_path: Path, title: str, brief: str,
 3. **本文贡献** — 一句话
 4. **效果指标** — 一句话
 
-## 技术拆解（全部方法内容，这是报告主体）
+## 方法拆解（全部方法内容，这是报告主体）
+   
+### 整体思路（直白解释）
+- 用通俗语言解释：**为什么这样做**、**每个步骤在干什么**
+- 说清设计动机和直觉，让非专业读者也能理解
 
-对每个算法/组件/公式，按顺序说明：
+### 分步拆解
+对每个算法/组件/公式，按顺序以步骤格式说明：
+
+**步骤 N: [组件/公式名称]**
 - **输入/目的**：输入什么，要解决什么问题
 - **原理**：怎么做的（直觉解释，先说在干什么）
 - **公式**：关键公式 + 符号含义 + 直觉
 - **输出/效果**：输出什么，效果和对后续的影响
+- **效果说明**：输出值大小或取值范围对后续步骤的影响
 
-要求：中文，**概览不涉及方法细节**，**技术拆解覆盖所有方法内容**。
+## 启示与思考
+- 该工作的启发性、关键洞见
+- 与已有知识的关联
+- 未来方向建议
+- 实践中的应用前景
+
+要求：中文，**概览不涉及方法细节**，**方法拆解覆盖所有方法内容**。
 用 `![描述]({example_img})` 引用核心架构图/流程图。
-不用 wikilinks，直接输出。"""
+**重要：直接输出纯文本，不要用 ```markdown ``` 代码块包裹。**"""
+
+
+def clean_report_section_titles(raw: str) -> str:
+    """Strip parenthetical LLM instructions from section titles.
+    
+    E.g. '## 论文概览（仅背景、贡献和指标，不要涉及方法细节）' → '## 论文概览'
+    """
+    raw = re.sub(r'^(#{1,4}\s+.+?)[（(].*?[）)]', r'\1', raw, flags=re.MULTILINE)
+    return raw
 
 
 def generate_deepdive(file_path: Path, title: str, brief: str,
-                      prefix: str = "", downloaded_images: list = None) -> str:
+                      prefix: str = "", downloaded_images: list = None,
+                      source_url: str = "") -> str:
     """Generate a 1500-3000 word deep-dive report for the file."""
-    prompt = build_deepdive_prompt(file_path, title, brief, prefix, downloaded_images)
+    prompt = build_deepdive_prompt(file_path, title, brief, prefix, downloaded_images, source_url)
     try:
         raw = call_llm(prompt, max_tokens=8192)
         raw = re.sub(r"^```(?:markdown)?\s*", "", raw.strip())
         raw = re.sub(r"\s*```$", "", raw.strip())
+        raw = clean_report_section_titles(raw)
         return raw
     except Exception as e:
         return f"⚠️ 深度阅读生成失败：{e}"
 
 
-def build_deepdive_from_summary_prompt(title: str, brief: str, detailed_report: str) -> str:
+def build_deepdive_from_summary_prompt(title: str, brief: str, detailed_report: str,
+                                       source_url: str = "") -> str:
     """Build prompt for deep report from existing summary."""
     return f"""你是 AI 深度阅读助手。请基于以下文档信息，生成一份清晰易懂的深度阅读报告。
 
@@ -576,12 +622,18 @@ def build_deepdive_from_summary_prompt(title: str, brief: str, detailed_report: 
 - 标题: {title}
 - 已有简介: {brief}
 - 已有详细报告: {detailed_report}
+{('- 来源链接: ' + source_url) if source_url else ''}
 
-请生成包含以下两部分的报告（严格避免重叠）：
+报告结构要求：
 
----
+## 元数据（放在报告最开头）
+- 论文标题: {title}
+- 原始链接: [{source_url}]({source_url})（如有）
+- 项目主页:（从已有信息中提取，如无可留空）
+- 代码仓库:（从已有信息中提取，如无可留空）
+- 对应 brief 条目: 来自 brief.md
 
-**第一部分：论文概览（仅背景、贡献、指标，不含方法细节）**
+## 论文概览（仅背景、贡献、指标，不含方法细节）
 
 用简洁语言回答以下 4 点（每项 1-2 句话）：
 
@@ -590,38 +642,42 @@ def build_deepdive_from_summary_prompt(title: str, brief: str, detailed_report: 
 3. **本文贡献** — 一句话
 4. **效果** — 一句话
 
----
+## 方法拆解（全部方法内容，这是报告主体）
 
-**第二部分：技术深度拆解（全部方法内容，这是报告主体）**
+### 整体思路（直白解释）
+- 用通俗语言解释：**为什么这样做**、**每个步骤在干什么**
+- 说清设计动机和直觉
 
+### 分步拆解
 对文档中涉及的算法/方法/公式，按顺序逐一展开：
 
-每个算法/方法/公式按这个格式写：
-
-### [算法/方法名称]
-
+**步骤 N: [算法/方法名称]**
 - **输入/目的**：输入什么，解决什么问题
 - **原理**：怎么做的（先解释在干什么，再说公式）
 - **公式**：关键公式 + 符号含义 + 直觉
 - **输出/效果**：输出什么，对后续的影响
 
----
+## 启示与思考
+- 该工作的启发性、关键洞见
+- 与已有知识的关联
+- 未来方向建议
 
 整体要求：
 - 中文
-- **概览不涉及方法细节，技术拆解覆盖所有方法**
+- **概览不涉及方法细节，方法拆解覆盖所有方法**
 - 不要出现 [[wikilinks]] 格式
-- 直接输出报告内容
-"""
+- **直接输出纯文本，不要用 ```markdown ``` 代码块包裹**"""
 
 
-def generate_deepdive_from_summary(title: str, brief: str, detailed_report: str) -> str:
+def generate_deepdive_from_summary(title: str, brief: str, detailed_report: str,
+                                   source_url: str = "") -> str:
     """Generate deep report from existing summary and detailed report."""
-    prompt = build_deepdive_from_summary_prompt(title, brief, detailed_report)
+    prompt = build_deepdive_from_summary_prompt(title, brief, detailed_report, source_url)
     try:
         raw = call_llm(prompt, max_tokens=8192)
         raw = re.sub(r"^```(?:markdown)?\s*", "", raw.strip())
         raw = re.sub(r"\s*```$", "", raw.strip())
+        raw = clean_report_section_titles(raw)
         return raw
     except Exception as e:
         return f"⚠️ 深度阅读生成失败：{e}"
@@ -747,18 +803,17 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
         print(f"\n发现 {len(disinterest_entries)} 个标记为「不感兴趣」的条目:")
 
         if "--phase1" in sys.argv:
-            # Phase 1: write prompts to files
-            tasks = []
+            # Phase 1: accumulate disinterest tasks; deep-read tasks will be added below
+            _disinterest_tasks = []
             for de in disinterest_entries:
                 prompt = build_disinterest_suggestion_prompt(de)
-                tasks.append({
+                _disinterest_tasks.append({
                     "id": f"disinterest_{de['title'][:30]}",
                     "prompt": prompt,
                     "max_tokens": 1024,
                     "metadata": {"title": de['title']},
                 })
-            prepare_tasks(tasks)
-            return
+            print(f"  已添加 {len(disinterest_entries)} 个不感兴趣分析任务")
 
         if "--phase2" in sys.argv:
             # Phase 2: read results
@@ -844,7 +899,8 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
 
     # ── Phase 1: prepare tasks ──
     if "--phase1" in sys.argv:
-        tasks = []
+        # Include any disinterest tasks accumulated above
+        tasks = list(_disinterest_tasks) if '_disinterest_tasks' in dir() else []
         metadata_map = {}  # task_id -> metadata for phase2
         for entry in entries:
             title = entry['title']
@@ -860,6 +916,13 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                 existing_titles = re.findall(r'^## (.+)$', existing_content, re.MULTILINE)
                 if any(title.strip() == t.strip() for t in existing_titles):
                     print(f"  ⏭️  {title} — 已存在于 {existing_deepdive.relative_to(REPO_ROOT)}，跳过")
+                    continue
+            # Fallback: if deepdive.md doesn't have the title but standalone file exists
+            if not existing_deepdive.exists():
+                slug = safe_title.lower().replace('__', '-').replace('_', '-')
+                standalone = DAILY_DIR / "deepdive" / date_key / f"{slug}.md"
+                if standalone.exists():
+                    print(f"  ⏭️  {title} — 已存在于 {standalone.relative_to(REPO_ROOT)}，跳过")
                     continue
 
             # Prepare paths
@@ -886,7 +949,9 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
             # Build prompt
             if file_path and file_path.exists():
                 prompt = build_deepdive_prompt(file_path, title, entry['brief'],
-                                               prefix=safe_title, downloaded_images=downloaded_images)
+                                               prefix=safe_title, downloaded_images=downloaded_images,
+                                               source_url=entry.get('source_url', ''),
+                                               entry_lines=entry.get('entry_lines', ''))
             else:
                 detailed_report = ''
                 detailed_match = re.search(r'\*\*详细报告\*\*：(.+?)(?=\n\n|\n###|$)', entry['entry_lines'], re.DOTALL)
@@ -932,8 +997,58 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
 
         clean_task_dirs()
     else:
-        # Normal mode: direct LLM calls
-        by_date = defaultdict(list)
+        # Normal mode: use existing phase1 logic to prepare tasks, then return
+        print("  ↪ 自动转为 phase1 模式")
+        # Jump to phase1 logic by re-executing the phase1 block
+        _phase1_tasks = []
+        for entry in entries:
+            title = entry['title']
+            safe_title = ''.join(c if c.isalnum() or c in '-_' else '_' for c in title)
+            file_path, source_date = _find_source_file(entry, today)
+            date_key = source_date or today
+            existing_deepdive = DAILY_DIR / "deepdive" / date_key / "deepdive.md"
+            if existing_deepdive.exists():
+                existing_content = existing_deepdive.read_text(encoding="utf-8")
+                existing_titles = re.findall(r'^## (.+)$', existing_content, re.MULTILINE)
+                if any(title.strip() == t.strip() for t in existing_titles):
+                    print(f"  ⏭️  {title} — 已存在，跳过")
+                    continue
+            base_dir = DAILY_DIR / "deepdive" / date_key
+            downloaded_images = []
+            if file_path and file_path.exists():
+                content = read_file(file_path)
+                all_imgs = extract_images(content)
+                if all_imgs:
+                    image_dir = base_dir / "images"
+                    url_imgs = [(a, u, c) for a, u, c in all_imgs if u.startswith("http")]
+                    local_imgs = [(a, u, c) for a, u, c in all_imgs if not u.startswith("http")]
+                    if url_imgs:
+                        dl = download_images(url_imgs, image_dir, safe_title)
+                        downloaded_images.extend(dl)
+                    if local_imgs:
+                        sources_img_dir = file_path.parent / "images"
+                        if sources_img_dir.exists():
+                            cl = copy_local_images(local_imgs, sources_img_dir, image_dir, safe_title)
+                            downloaded_images.extend(cl)
+            if file_path and file_path.exists():
+                prompt = build_deepdive_prompt(file_path, title, entry['brief'],
+                                               prefix=safe_title, downloaded_images=downloaded_images,
+                                               source_url=entry.get('source_url', ''),
+                                               entry_lines=entry.get('entry_lines', ''))
+            else:
+                detailed_report = re.search(r'\*\*详细报告\*\*：(.+?)(?=\n\n|\n###|$)', entry['entry_lines'], re.DOTALL)
+                prompt = build_deepdive_from_summary_prompt(title, entry['brief'], 
+                    detailed_report.group(1).strip() if detailed_report else '',
+                    source_url=entry.get('source_url', ''))
+            _phase1_tasks.append({
+                "id": f"deepdive_{safe_title}",
+                "prompt": prompt,
+                "max_tokens": 8192,
+                "metadata": {"title": title, "date_key": date_key, "safe_title": safe_title},
+            })
+        if _phase1_tasks:
+            prepare_tasks(_phase1_tasks)
+        return
         for entry in entries:
             title = entry['title']
             print(f"Processing: {title}")
@@ -977,13 +1092,15 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                     file_path, title, entry['brief'],
                     prefix=safe_title, downloaded_images=downloaded_images,
                 )
+
             else:
                 print(f"  ⚠️  Source not found, generating from brief only")
                 detailed_report = ''
                 detailed_match = re.search(r'\*\*详细报告\*\*：(.+?)(?=\n\n|\n###|$)', entry['entry_lines'], re.DOTALL)
                 if detailed_match:
                     detailed_report = detailed_match.group(1).strip()
-                deep_report = generate_deepdive_from_summary(title, entry['brief'], detailed_report)
+                deep_report = generate_deepdive_from_summary(title, entry['brief'], detailed_report,
+                                                              source_url=entry.get('source_url', ''))
 
             by_date[date_key].append((safe_title, deep_report, image_dir, title))
             print(f"    ✓ {title}")
@@ -1135,6 +1252,7 @@ def run_direct_read(paper_input: str):
         file_path, title, "",
         prefix=''.join(c if c.isalnum() or c in '-_' else '_' for c in title),
         downloaded_images=downloaded_images,
+        source_url=source_url,
     )
 
     # Save report — write to deepdive.md (same as pipeline deep-read)

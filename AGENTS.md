@@ -1,5 +1,10 @@
 # LLM Wiki Agent — Schema & Workflow Instructions
 
+> **先读 `docs/architecture.md`**（~100 行）快速了解项目结构和数据流。
+> 然后在需要时参考本文档的对应章节。
+> 工具速查见 `docs/tools-reference.md`。
+> 项目优化相关见 `.opencode/skills/wiki-project-optimize/SKILL.md`。
+
 ## Output Language
 `config.json` specifies `"output_language": "zh-CN"`. All wiki output must be written in Simplified Chinese.
 
@@ -50,19 +55,16 @@ Describe what you want in plain English or use shorthand triggers:
 
 ### Pipeline Triggers
 
+触发词速查见 `docs/workflows/triggers.md`。下表仅列出高频触发词：
+
 | 触发词 | 动作 |
 |---|---|
-| `feeds` / `拉取 feeds` | 从配置的源拉取新内容到 inbox/ |
-| `inbox` / `处理 inbox` | 解析 inbox.md 链接 → 生成 .md 到 inbox/ |
-| `import bookmarks` / `导入书签` | 从 Edge 书签指定目录导入链接到 inbox.md |
-| `dedup inbox` / `去重 inbox` | 按 arxiv ID 去重 inbox.md，关联 pdf/GitHub/项目页 |
-| `archive bookmarks` / `归档书签` | 将 Edge Wiki/Inbox 书签移入 Wiki/Inbox Archive |
-| `书签流程` / `bookmark pipeline` | 一条命令完成：导入 → 去重 → 归档 |
 | `filter` / `开始筛选` | 筛选 inbox/ → 生成 digest/brief.md |
 | `deep read` / `生成深度阅读` | 对 brief.md 中勾选的条目生成深度阅读 |
 | `合入 wiki` / `ingest from digest` | 将 digest 中勾选条目合入 wiki |
 | `ingest <file>` / `合入 <file>` | 直接合入单个文件到 wiki |
 | `read paper <url>` / `阅读论文 <url>` / `深度阅读 <url>` | 直接阅读 arxiv/PDF/网页 → 生成深度阅读到 deepdive.md（arXiv 用 arxiv2md，PDF 用 pdf2md.py） |
+| `ingest paper <url>` / `直接合入 <url>` / `ingest paper <arxiv_id>` | 直接下载并合入 wiki（跳过 inbox/filter/deep-read）。见下方 Direct Ingest Workflow |
 | `read code` / `代码阅读` | 子代理驱动：收集代码 → 分析 → 生成 wiki 页面（见 Code Reading Workflow） |
 | `search papers <query>` / `搜索论文` | 使用 alphaXiv MCP 搜索论文并添加到 inbox |
 | `status` / `流程状态` | 检查各流程节点状态并建议下一步 |
@@ -70,23 +72,12 @@ Describe what you want in plain English or use shorthand triggers:
 
 ### Maintenance Triggers
 
+完整维护触发词见 `docs/workflows/triggers.md`。
+
 | 触发词 | 动作 |
 |---|---|
 | `health` | 结构完整性检查（快速，无 LLM） |
 | `lint` | 内容质量检查（慢，需要 LLM） |
-| `build graph` | 构建知识图谱 |
-| `heal` | 自动补全缺失的实体/概念页 |
-| `refresh` | 重新 ingest 已变更的源文档 |
-
-### Query Triggers
-
-| 触发词 | 动作 |
-|---|---|
-| `query: <question>` | 基于 wiki 内容回答（`python tools/query.py`） |
-| `read paper <arxiv_id>` | `arxiv2md <id> -o output.md` + LLM 深度阅读 |
-| *plain question* | 描述需求，如 "ingest this file: raw/papers/...md" |
-
-### Agent Proactive Reminders
 
 The agent should proactively detect and remind with trigger words:
 - **inbox.md has links**: "inbox.md 中有 N 个链接待处理（触发词: inbox）"
@@ -115,6 +106,8 @@ Agent **必须** 在每次操作后自觉评估并提出流程优化建议，目
 | **复用深度阅读** | 合入 wiki 时如有深度阅读报告，直接使用而非重读原文 |
 | **脚本化重复步骤** | 3 次以上的手工作业立即写脚本固化 |
 | **去重优先** | LLM 调用前先做低成本去重（arxiv ID 去重、关键词预过滤） |
+| **每子代理 1 论文** | deep-read/filter 每个子代理只处理 1 篇论文，prompt 含全文时不超上下文 |
+| **无代码块包裹** | 子代理 prompt 末尾加 **直接输出纯文本，不要 ```markdown ``` 包裹** 指令 |
 
 **提示方式：** 在每次任务完成后用 1-2 句话指出可优化的点，如"这 20 个文件可以分 2 批子代理而非单个处理，节省约 60% token"。
 
@@ -230,6 +223,9 @@ Steps:
    - Key data/insights interpretation
    - Comparison with related fields
    - Potential issues/limitations
+   - **元数据区块**：论文标题、作者、arXiv 链接、项目主页、代码仓库、对应的 brief 条目引用
+   - **方法双重写作**：先写整体思路（直白解释设计动机），再写分步拆解（步骤 1/2/3 的输入→处理→输出+效果）
+   - **启示/思考**：论文的启发、与已有知识的关联、未来方向建议
 4. Save deep-dive reports to `raw/digest/YYYY-MM-DD/deepdive.md`
 
 > **注意：** Stage 2 和 Stage 3 可独立触发。brief.md 中 `[x] 合入 wiki` 不需要先 `[x] 深度阅读`，可直接进入 Stage 3。
@@ -256,6 +252,47 @@ python tools/deep-read.py --paper /path/to/paper.pdf
 python tools/deep-read.py --paper https://example.com/article
 ```
 
+### Stage 2c: Direct Ingest (skip inbox/filter/deep-read)
+
+Triggered by: *"ingest paper <url>"* / *"直接合入 <url>"* / `python tools/ingest.py --paper <url-or-arxiv-id>`
+
+跳过 inbox→filter→deep-read 全部流程，直接下载论文并合入 wiki。
+
+```bash
+# arxiv URL 或 ID
+python tools/ingest.py --paper https://arxiv.org/abs/2401.12345
+python tools/ingest.py --paper 2401.12345
+
+# PDF 路径
+python tools/ingest.py --paper /path/to/paper.pdf
+
+# 网页 URL
+python tools/ingest.py --paper https://example.com/article
+```
+
+**Agent 触发时的工作流：**
+1. 检测输入类型：
+   - arxiv URL/ID → `arxiv2md <id> -o output.md` 转换为 markdown
+   - PDF 路径 → `pdf2md.py` 转换为 markdown
+   - 网页 URL → `webfetch` + trafilatura 提取
+2. 自动运行 `python tools/ingest.py <output.md>` 直接合入 wiki
+3. 更新 `wiki/log.md` 和 `wiki/index.md`
+
+### 评论与启示写入 Wiki
+
+**原则：** 无论来自 brief 中的用户评论、深度阅读报告的启示、还是用户直接发给 agent 的评论，agent 应主动将其整合到 wiki 页面。
+
+**写入方式：**
+- 在 wiki 页面的 `## Limitations` 之后新增 `## 评论与启示` 章节
+- 评论包括：个人见解、与其他工作的对比思考、未来方向建议、实践心得等
+- 章节内容保留评论来源引用（如"来自 deep-read 报告"或"用户手动添加"）
+- 合入 wiki 时，prompt 中携带评论内容，由 LLM 决定如何整合
+
+**Agent 主动检测：**
+- Deep-read 报告末尾如有"启示/思考"内容 → 自动带入 ingest prompt
+- 用户提交评论（如"我想说这篇论文..."）→ 记入 session 状态，在下一次 ingest 时写入
+- Brief.md 条目中用户额外写的备注 → 随 brief 数据一并传递给 ingest
+
 ### Stage 3: Ingest to Wiki
 
 Triggered by: *"ingest from digest"* or `python tools/ingest.py --from-digest YYYY-MM-DD`
@@ -272,6 +309,23 @@ Steps:
 5. Move files to appropriate category directory (raw/{papers,articles,...}/)
 6. Run ingest() for each file (follows existing Ingest Workflow)
 7. Update brief.md status
+
+#### ⚠️ 评论/启示自动携带
+合入 wiki 时，如果对应条目有：
+- 用户在 brief 中写的备注 → 自动传递给 ingest prompt
+- 深度阅读报告中的"启示/思考"部分 → 自动提取并传递给 ingest prompt
+- 用户直接发给 agent 的评论 → 由 agent 记入 session 状态，在 ingest 时写入
+
+这些内容将在 `## 评论与启示` 章节中呈现。
+
+#### ⚠️ 源文件链接规则
+Wiki 页面的 `## 原始出处` 章节必须包含：
+- 原始 md 文件路径（相对 wiki/sources/ 的路径）
+- 原文 URL
+- **Brief 条目引用**（如 brief.md 中对应的章节标题和日期）
+- **深度阅读报告引用**（如 deepdive/日期/slug.md 对应的文件路径）
+
+路径使用 `os.path.relpath()` 计算以确保**相对路径正确**，即使归档后地址改变也通过 repo 根目录重新计算。不要在 URL 中硬编码日期或路径。
 
 #### ⚠️ 模板遵从规则
 
@@ -360,148 +414,14 @@ Triggered by: *"read code"* or *"代码阅读"*
 
 ### 主 agent 调用示例
 
+详细 prompt 模板见 `docs/workflows/code-read.md`。概要：
+
 ```python
 actor({
     "operation": "run",
     "subagent_type": "general",
     "description": "代码走读: <project-name>",
-    "prompt": """分析代码并生成 wiki 页面。
-
-步骤：
-1. 运行 `python tools/code-read.py collect <path> [-o /tmp/code.json]` 收集代码
-2. 读取源码，生成结构化分析 JSON（字段见下）
-3. 将 JSON 写入 /tmp/analysis.json
-4. 运行 `python tools/code-read.py write --json-file /tmp/analysis.json`
-
-分析 JSON 必须包含：
-- title: 简明标题
-- slug: kebab-case 文件名
-- language: 主要编程语言
-- summary: 2-4 句概述
-- framework_overview: 架构描述（300-500字），必须包含：
-  - 设计意图表：解释每个关键设计决策的原因（如"为什么分离 pass"、"为什么用这种色彩空间"）
-  - 源文件映射表：列出每个源文件的功能和所属模块
-  - 数据流图：Mermaid graph LR 展示模块间的数据传递（含纹理格式）
-- algorithm_flow: 核心算法流程（300-500字）
-- step_breakdown: 步骤数组（step, name, input, process, output）
-- io_analysis: 输入输出分析（200-400字）
-- mermaid_architecture: Mermaid graph TD 架构图，要求：
-  - 每个节点标注设计意图（如 `style` 高亮关键决策点）
-  - 分支节点用 `{}` 表示条件选择
-  - 注释说明每个模块的职责
-  - 使用 stroke 边框高亮（不用 fill 填充，兼容深色主题）：`stroke:#888,stroke-width:2px`
-- mermaid_flowchart: Mermaid flowchart TD 详细流程图（纵向，避免长横条），要求：
-  - 使用 subgraph 分组相关步骤
-  - 标注输入/输出数据格式
-  - 关键步骤用 stroke 高亮（同上）
-- mermaid_callgraph: Mermaid graph TD 调用图，要求：
-  - 按模块分组（如 V1/V2，EASU/RCAS）
-  - 标注函数的职责
-  - 使用 stroke 区分模块
-- flowchart_details: 每个 Mermaid 流程图后的详细说明（必须包含），要求：
-  - 对每个模块/步骤说明：输入、处理、输出
-  - 具体功能描述
-  - 具体流程算法（如公式、计算步骤）
-  - **每个输出必须说明效果和影响**：例如"局部对比度越大锐化权重越大"、"噪声因子越大锐化权重越小"
-  - **详细输入输出效果说明**：对于每个算法步骤，必须说明：
-    - 输入参数的含义和作用
-    - 处理过程的数学原理
-    - 输出结果的物理含义
-    - 输出值大小对后续步骤的影响（如"contrast大→锐化权重增大"）
-    - 不同取值范围的效果对比（如"std大→滤波器响应强，保留细节"、"std小→滤波器响应弱，平滑噪声"）
-  - **必要时加入图示说明**：对于采样模式、数据布局、坐标系等复杂概念，使用 ASCII 图示或表格补充说明
-  - **新出现的符号必须先定义**：使用前先说明符号含义
-  - **避免内容重复**：同一算法的详细说明只保留一份，不要在多个章节重复
-  - 使用中文撰写
-
-### Wiki 页面结构规范
-
-**避免重复的关键原则：**
-- 算法详细说明只在一个地方完整展开
-- 流程图章节只包含图表和简要引用
-- 使用 `→ 详见 [章节名]` 引用其他章节的详细内容
-
-**推荐的 wiki 页面结构：**
-```
-## Summary
-## 原始出处
-## 框架概览
-  ### 架构设计意图
-  ### 源文件映射
-  ### 数据流
-## 算法详解
-  ### 整体架构图（Mermaid graph TD）
-  ### 算法 A
-    - 流程图（Mermaid flowchart TD）
-    - 步骤 1: 输入处理
-    - 步骤 2: 核心计算
-    - ...
-  ### 算法 B
-    - 流程图（Mermaid flowchart TD）
-    - 步骤 1: 输入处理
-    - 步骤 2: 核心计算
-    - ...
-  ### 调用关系图（Mermaid graph TD）
-## 依赖关系
-## 关键数据结构
-## 设计模式
-## Connections
-## Contradictions
-```
-
-**示例：架构图与算法详解合并**
-```markdown
-## 算法详解
-
-### 整体架构图
-
-```mermaid
-graph TD
-    A[输入] --> B[算法A]
-    B --> C[算法B]
-    C --> D[输出]
-```
-
-### 算法 A
-
-```mermaid
-flowchart TD
-    A1[输入] --> A2[处理] --> A3[输出]
-```
-
-**步骤 1: 输入处理**
-- 输入: ...
-- 处理: ...
-- 输出: ...
-- **效果**: contrast大→锐化权重增大
-
-### 算法 B
-
-```mermaid
-flowchart TD
-    B1[输入] --> B2[处理] --> B3[输出]
-```
-
-**步骤 1: 输入处理**
-- 输入: ...
-- 处理: ...
-- 输出: ...
-
-### 调用关系图
-
-```mermaid
-graph TD
-    Main --> Func1
-    Main --> Func2
-```
-```
-- dependencies: 外部依赖数组
-- key_data_structures: 数据结构描述（100-300字）
-- design_patterns: 设计模式描述（100-200字），必须解释每个模式的**优势**和**适用场景**
-- source_path: 源码路径
-- source_url: 仓库地址（可选）
-
-使用中文撰写所有描述。Mermaid 节点用中文标注。"""
+    "prompt": """分析代码并生成 wiki 页面。步骤、JSON 字段、wiki 页面结构见 docs/workflows/code-read.md。使用中文撰写所有描述。"""
 })
 ```
 
