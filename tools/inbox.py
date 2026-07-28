@@ -635,6 +635,26 @@ def _fetch_arxiv_api(arxiv_id: str) -> str:
             if tmp.exists():
                 tmp.unlink()
 
+    # Final fallback: alphaXiv overview (AI-generated structured report in markdown)
+    alphaxiv_url = f"https://www.alphaxiv.org/overview/{arxiv_id}.md"
+    try:
+        resp = requests.get(alphaxiv_url, timeout=15,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200 and len(resp.text) > 5000:
+            content = resp.text
+            # Prepend frontmatter with original arxiv URL
+            title_match = content.split("\n")[0] if content else ""
+            return f"""---
+title: "{title_match.lstrip('# ').strip() if title_match else f'arXiv {arxiv_id}'}"
+url: "https://arxiv.org/abs/{arxiv_id}"
+source: "alphaxiv overview"
+---
+
+{content}
+"""
+    except Exception:
+        pass
+
     return f"# arXiv: {arxiv_id}\n\n[arxiv2md not installed — try: pip install git+https://github.com/Linxius/arxiv2md.git]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}"
 
 
