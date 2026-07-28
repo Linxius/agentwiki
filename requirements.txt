@@ -9,5 +9,4 @@ readability-lxml
 trafilatura
 
 # arxiv paper → markdown (Linxius fork, supports image download)
-# pip install git+https://github.com/Linxius/arxiv2md.git
-arxiv2md
+git+https://github.com/Linxius/arxiv2md.git

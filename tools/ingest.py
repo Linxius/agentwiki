@@ -108,7 +108,6 @@ def extract_url_from_file(source: Path, source_content: str) -> str | None:
 def write_file(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    print(f"  wrote: {path.relative_to(REPO_ROOT)}")
 
 
 def build_wiki_context() -> str:
@@ -128,6 +127,7 @@ def build_wiki_context() -> str:
 
 _SHARED_CONTEXT_FILE = "wiki-ingest-context.md"
 _SHARED_CACHE_MARKER = "wiki-ingest-context.last"  # timestamp marker
+_SHARED_CONTEXT_PATH = None  # module-level cache for get_shared_ingest_context()
 
 
 def get_shared_ingest_context() -> Path | None:
@@ -277,7 +277,7 @@ def update_interests_from_ingest(created_entity_pages: list[dict], created_conce
         interests_content = read_file(INTERESTS_FILE)
         existing_interests = parse_interests(interests_content) if interests_content else []
         if not existing_interests:
-            print("\n  提示: wiki/interests.md 为空，请先添加兴趣点。")
+            return
         return
 
     try:
@@ -291,7 +291,6 @@ def update_interests_from_ingest(created_entity_pages: list[dict], created_conce
     
     new_interests = data.get("new_interests", [])
     if not new_interests:
-        print("\n  未发现新兴趣点。")
         return
 
     # Read existing interests for dedup
@@ -303,7 +302,6 @@ def update_interests_from_ingest(created_entity_pages: list[dict], created_conce
     new_to_add = [ni for ni in new_interests if ni["name"] not in existing_names]
     
     if not new_to_add:
-        print("\n  所有新兴趣已存在于 interests.md 中。")
         return
     
     # Update interests.md
@@ -350,9 +348,6 @@ def update_interests_from_ingest(created_entity_pages: list[dict], created_conce
     )
     
     write_file(INTERESTS_FILE, content_str)
-    print(f"\n  ✅ 更新兴趣点: 新增 {len(new_to_add)} 个兴趣")
-    for ni in new_to_add:
-        print(f"    + {ni['name']} ({ni['category']})")
 
 
 def update_index(new_entry: str, section: str = "Sources"):
@@ -384,6 +379,52 @@ def update_index(new_entry: str, section: str = "Sources"):
 def append_log(entry: str):
     existing = read_file(LOG_FILE)
     write_file(LOG_FILE, entry.strip() + "\n\n" + existing)
+
+
+def _append_to_overview(bullet: str):
+    """Append a bullet point to the overview page.
+
+    Reads current overview.md, finds the last section,
+    and appends the bullet before the next section or at end of file.
+    Never overwrites the full file.
+    """
+    from datetime import date as _date
+    content = read_file(OVERVIEW_FILE)
+    today_str = _date.today().isoformat()
+    if not content:
+        # No overview yet — create minimal structure
+        content = f"""---
+title: "Overview"
+type: synthesis
+tags: []
+sources: []
+last_updated: "{today_str}"
+---
+
+# Overview
+
+当前 wiki 包含以下已合入的源文档：
+
+### 论文
+
+"""
+    # Find insertion point: end of the last section (before next ### or end)
+    lines = content.split("\n")
+    # Find the last non-empty line that is not a section header
+    insert_idx = len(lines)
+    for i in range(len(lines) - 1, -1, -1):
+        stripped = lines[i].strip()
+        if stripped.startswith("### ") or stripped.startswith("## "):
+            # Insert after the content before this header
+            insert_idx = i
+            break
+    # If we hit a header, insert right before it (end of previous section)
+    # OR append at the very end
+    if bullet.startswith("- ") or bullet.startswith("  - "):
+        lines.insert(insert_idx, bullet)
+    else:
+        lines.insert(insert_idx, f"- {bullet}")
+    write_file(OVERVIEW_FILE, "\n".join(lines))
 
 
 def validate_ingest(changed_pages: list[str] | None = None) -> dict:
@@ -442,7 +483,6 @@ def convert_to_md(source: Path) -> Path:
         # Delegate to pdf2md.py which handles PDF conversion
         import subprocess
         pdf2md_path = REPO_ROOT / "tools" / "pdf2md.py"
-        print(f"  Converting PDF with pdf2md.py...")
         result = subprocess.run(
             [sys.executable, str(pdf2md_path), str(source)],
             capture_output=True, text=True, timeout=600
@@ -464,8 +504,7 @@ def convert_to_md(source: Path) -> Path:
     try:
         from markitdown import MarkItDown
     except ImportError:
-        print("Error: markitdown not installed (needed to convert non-.md files).")
-        print("  Install with: pip install markitdown")
+        print(f"Error: markitdown not installed.")
         sys.exit(1)
 
     md = MarkItDown(enable_plugins=False)
@@ -485,7 +524,6 @@ def convert_to_md(source: Path) -> Path:
         tmp.write_text(result.text_content, encoding="utf-8")
         output = tmp
 
-    print(f"  ✓ Converted {source.name} → {output.name}")
     return output
 
 
@@ -601,16 +639,21 @@ def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
                         url_instruction, today, source_content,
                         img_prompt_section, shared_context_path: str = "",
                         comments: str = "", deepdive_path: str = "",
-                        brief_entry_ref: str = ""):
+                        brief_entry_ref: str = "",
+                        source_content_path: str = ""):
     """Build the LLM prompt for ingesting a source document.
     
     When shared_context_path is set, the subagent reads schema + wiki context
     from that file instead of receiving it inline (saves ~68KB per task).
     
+    When source_content is very large (>20KB) and source_content_path is set,
+    the full source is NOT inlined — subagent reads it via its own Read tool.
+    
     Args:
         comments: User/agent comments/insights to incorporate into wiki
         deepdive_path: Path to deep-read report for this entry
         brief_entry_ref: Brief.md entry reference (date + title)
+        source_content_path: If set, subagent reads source from this file path
     """
     context_section = (
         f"Read shared wiki context from `{shared_context_path}` "
@@ -635,6 +678,15 @@ def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
         )
         comments_section = "\n".join(parts)
     
+    INLINE_THRESHOLD = 20000
+    if source_content_path and len(source_content) > INLINE_THRESHOLD:
+        source_section = (
+            f"(Source is large — {len(source_content)} chars. Read it directly:)\n\n"
+            f"Read the file `{source_content_path}` to get the full source content."
+        )
+    else:
+        source_section = source_content
+    
     return f"""You are maintaining an LLM Wiki. Process this source document and integrate its knowledge into the wiki.
 
 Schema and conventions:
@@ -647,7 +699,7 @@ source_url: {source_url_display}
 {comments_section}
 
 === SOURCE START ===
-{source_content}
+{source_section}
 === SOURCE END ===
 
 Today's date: {today}
@@ -668,7 +720,7 @@ Return ONLY a valid JSON object with these fields (no markdown fences, no prose 
   "slug": "kebab-case-slug-for-filename",
   "source_page": "full markdown content for wiki/sources/<slug>.md — use the source page format from the schema. CRITICAL: Aggressively convert key people, products, concepts and projects into [[Wikilinks]] inline in the text. Omitting [[ ]] for known terms is a failure.",
   "index_entry": "- [Title](sources/slug.md) — one-line summary",
-  "overview_update": "full updated content for wiki/overview.md, or null if no update needed",
+  "overview_update": "single bullet point to append to wiki/overview.md (e.g. \"- [[Title|slug]] — description\"), or null if no update needed",
   "entity_pages": [
     {{"path": "entities/EntityName.md", "content": "full markdown content"}}
   ],
@@ -693,13 +745,10 @@ def ingest(source_path: str, auto_convert: bool = True,
     converted_path = None
     if source.suffix.lower() != ".md":
         if not auto_convert:
-            print(f"  Skipping non-.md file (--no-convert): {source.name}")
             return
         if source.suffix.lower() not in CONVERTIBLE_EXTENSIONS:
-            print(f"  ⚠️  Unsupported format: {source.suffix} — skipping {source.name}")
-            print(f"       Supported: {', '.join(sorted(ALL_SUPPORTED_EXTENSIONS))}")
+            print(f"Error: unsupported format {source.suffix}")
             return
-        print(f"  Converting {source.name} to markdown...")
         converted_path = convert_to_md(source)
         source = converted_path
 
@@ -716,9 +765,8 @@ def ingest(source_path: str, auto_convert: bool = True,
             if user_url:
                 source_url = user_url
                 inject_source_url(source, source_url)
-                print(f"  ✅ URL 已写入文件 frontmatter")
         else:
-            print(f"  ⚠️  未找到原始出处 URL，非交互模式跳过")
+            pass
 
     raw_relative_path = os.path.relpath(
         str(source), str(WIKI_DIR / "sources")
@@ -730,8 +778,6 @@ def ingest(source_path: str, auto_convert: bool = True,
         if source_url else
         '- If no source_url is available, set frontmatter `url:` to "" (empty string).'
     )
-
-    print(f"\nIngesting: {source.name}  (hash: {source_hash})")
 
     # ── Image handling ──────────────────────────────────────────────
     tmp_img_dir = None
@@ -750,7 +796,6 @@ def ingest(source_path: str, auto_convert: bool = True,
                 all_imgs.extend(copy_local_images(local_imgs, sources_img_dir, tmp_img_dir))
         if all_imgs:
             img_prompt_section = build_ingest_image_prompt(all_imgs)
-            print(f"  Found {len(all_imgs)} images for wiki use")
         else:
             shutil.rmtree(tmp_img_dir, ignore_errors=True)
             tmp_img_dir = None
@@ -765,6 +810,7 @@ def ingest(source_path: str, auto_convert: bool = True,
         img_prompt_section, shared_context_path=shared_ctx_arg,
         comments=comments, deepdive_path=deepdive_path,
         brief_entry_ref=brief_entry_ref,
+        source_content_path=source_file_repo,
     )
 
     # ── Phase 1: write prompt to file for subagent ──
@@ -791,11 +837,8 @@ def ingest(source_path: str, auto_convert: bool = True,
             print(f"Error: no result found for {task_id}")
             sys.exit(1)
     else:
-        # Default mode: auto-convert to phase1 (writes task file)
-        print(f"  📤 自动转为 phase1 模式（创建 task 文件）")
         raw = call_llm(prompt, max_tokens=8192)
         if not raw:
-            print(f"  Task 已创建。请运行 --phase2 完成 ingest。")
             return
 
     try:
@@ -812,9 +855,7 @@ def ingest(source_path: str, auto_convert: bool = True,
 
     # Copy referenced images to wiki/images/<slug>/
     if tmp_img_dir and tmp_img_dir.exists():
-        img_count = copy_referenced_images(data["source_page"], slug, tmp_img_dir)
-        if img_count:
-            print(f"  Images: {img_count} saved to wiki/images/{slug}/")
+        copy_referenced_images(data["source_page"], slug, tmp_img_dir)
 
     # Write entity pages
     for page in data.get("entity_pages", []):
@@ -829,9 +870,9 @@ def ingest(source_path: str, auto_convert: bool = True,
     created_concept_pages = data.get("concept_pages", [])
     update_interests_from_ingest(created_entity_pages, created_concept_pages)
 
-    # Update overview
+    # Update overview (append bullet, never overwrite full file)
     if data.get("overview_update"):
-        write_file(OVERVIEW_FILE, data["overview_update"])
+        _append_to_overview(data["overview_update"].strip())
 
     # Update index
     update_index(data["index_entry"], section="Sources")
@@ -841,10 +882,6 @@ def ingest(source_path: str, auto_convert: bool = True,
 
     # Report contradictions
     contradictions = data.get("contradictions", [])
-    if contradictions:
-        print("\n  ⚠️  Contradictions detected:")
-        for c in contradictions:
-            print(f"     - {c}")
 
     # --- Post-ingest validation ---
     created_pages = [f"sources/{slug}.md"]
@@ -857,33 +894,11 @@ def ingest(source_path: str, auto_convert: bool = True,
         updated_pages.append("overview.md")
 
     validation = validate_ingest(created_pages)
-
-    print(f"\n{'='*50}")
-    print(f"  ✅ Ingested: {data['title']}")
-    print(f"{'='*50}")
-    print(f"  Created : {len(created_pages)} pages")
-    for p in created_pages:
-        print(f"           + wiki/{p}")
-    print(f"  Updated : {len(updated_pages)} pages")
-    for p in updated_pages:
-        print(f"           ~ wiki/{p}")
-    if contradictions:
-        print(f"  Warnings: {len(contradictions)} contradiction(s)")
-    if validation["broken_links"]:
-        print(f"  ⚠️  Broken links: {len(validation['broken_links'])}")
-        for page, link in validation["broken_links"][:10]:
-            print(f"           wiki/{page} → [[{link}]]")
-        if len(validation["broken_links"]) > 10:
-            print(f"           ... and {len(validation['broken_links']) - 10} more")
-    if validation["unindexed"]:
-        print(f"  ⚠️  Not in index.md: {len(validation['unindexed'])}")
-        for p in validation["unindexed"][:10]:
-            print(f"           wiki/{p}")
-        if len(validation["unindexed"]) > 10:
-            print(f"           ... and {len(validation['unindexed']) - 10} more")
-    if not validation["broken_links"] and not validation["unindexed"]:
-        print("  ✓ Validation passed — no broken links, all pages indexed")
-    print()
+    broken = len(validation["broken_links"])
+    unindexed = len(validation["unindexed"])
+    warn = f", {broken} broken links" if broken else ""
+    warn += f", {unindexed} unindexed" if unindexed else ""
+    print(f"  [{slug}] {len(created_pages)} created, {len(updated_pages)} updated{warn}")
 
 
 def _parse_entry_from_brief(lines: list[str], start_i: int, entry_lines: list[str]) -> dict:
@@ -1053,11 +1068,10 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
     for f in (digest_dir / "analysis-results.json", digest_dir / "analysis-results.jsonc"):
         if f.exists():
             f.unlink()
-            print(f"  🧹 已删除中间文件: {f.relative_to(REPO_ROOT)}")
     
     # If date_str specified, skip briefs that don't match
     if date_str and brief_date and brief_date != date_str:
-        print(f"brief.md 的日期 ({brief_date}) 与请求的日期 ({date_str}) 不匹配，跳过")
+        print(f"Date mismatch: {brief_date} != {date_str}")
         return
     
     # Parse entries with "[x] 合入 wiki"
@@ -1084,9 +1098,7 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
     if not entries:
         print("No entries marked for wiki ingest.")
         return
-    
-    print(f"Found {len(entries)} entries marked for wiki ingest.\n")
-    
+
     # Resolve file paths — search across all date dirs in sources/
     sources_base = digest_dir / "sources"
     for entry in entries:
@@ -1122,54 +1134,15 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
     merged_groups = _group_entries_for_merge(entries)
     total_items = sum(len(g) for g in merged_groups)
     if total_items != len(entries):
-        # sanity check — should never happen
         merged_groups = [[e] for e in entries]
-    
-    # Show what will be ingested
-    print("=" * 60)
-    print("待合入条目 (Files to ingest):")
-    print("=" * 60)
-    need_category_input = False
+
+    # Determine category for each entry (all default to 'papers')
     for group in merged_groups:
-        if len(group) > 1:
-            print(f"\n🔗 合并组 ({len(group)} 条):")
-            for e in group:
-                print(f"   - {e['title']}")
-                print(f"     源文件: {e.get('current_path', '?')}")
-                print(f"     领域: {e.get('domain', '?')}")
-            need_category_input = True
-        else:
-            e = group[0]
-            print(f"\n- {e['title']}")
-            print(f"  源文件: {e.get('current_path', '?')}")
-            print(f"  领域: {e.get('domain', '?')}")
-    
-    # Determine category for each entry (all default to 'papers' from digest)
-    for group in merged_groups:
-        if len(group) > 1:
-            print(f"\n合并组分类 [papers]: ", end="")
-            if auto_yes or not sys.stdin.isatty():
-                print("papers (--yes/非交互)")
-                cat = 'papers'
-            else:
-                cat = input().strip().lower() or 'papers'
-            for e in group:
-                e['category'] = cat
-        else:
-            e = group[0]
-            e['category'] = 'papers'
-    
-    print("\n" + "=" * 60)
-    if auto_yes or not sys.stdin.isatty():
-        print("--yes/非交互模式，自动确认合入。")
-    else:
-        confirm = input("确认合入 wiki? [y/N]: ").strip().lower()
-        if confirm != 'y':
-            print("已取消。")
-            return
-    
+        cat = 'papers'
+        for e in group:
+            e['category'] = cat
+
     # ── Ingest ──
-    print("\n开始合入 wiki...")
     
     # run_from_digest always uses --phase1 workflow (direct LLM calls are deprecated)
     if '--phase1' not in sys.argv:
@@ -1181,7 +1154,6 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             file_paths = [e['file_path'] for e in group if e.get('file_path')]
             combined = _combine_source_files(file_paths)
             if not combined:
-                print("  ⚠️  合并失败，跳过")
                 continue
             
             # Determine slug from first entry's source file
@@ -1192,10 +1164,9 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             dest_path = dest_dir / f"{first_slug}.md"
             
             if dest_path.exists():
-                print(f"  目标已存在: {dest_path.relative_to(REPO_ROOT)}，跳过")
+                continue
             else:
                 shutil.move(str(combined), str(dest_path))
-                print(f"  🔗 合并文件 → {dest_path.relative_to(REPO_ROOT)}")
                 
                 # Inject source URLs
                 urls = [e.get('source_url', '') for e in group if e.get('source_url')]
@@ -1218,7 +1189,6 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             # ── Single entry ──
             entry = group[0]
             file_path = entry['file_path']
-            print(f"\nIngesting: {file_path.name}")
             
             category = entry.get('category', 'papers')
             dest_dir = REPO_ROOT / "raw" / category
@@ -1226,16 +1196,12 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             dest_path = dest_dir / file_path.name
             
             if dest_path.exists():
-                print(f"  目标已存在: {dest_path.relative_to(REPO_ROOT)}，跳过")
                 continue
             
             shutil.copy2(str(file_path), str(dest_path))
-            print(f"  复制: {dest_path.relative_to(REPO_ROOT)}")
             
             if entry.get('source_url'):
                 inject_source_url(dest_path, entry['source_url'])
-            else:
-                print(f"  ⚠️  无 source_url，跳过 URL 注入")
             
             # Collect comments and deepdive reference
             comments = entry.get('comments', '')
@@ -1248,12 +1214,8 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                        brief_entry_ref=brief_ref)
                 # Only remove source after successful ingest
                 file_path.unlink()
-                print(f"  🧹 已清理 sources/ 中的原始文件: {file_path.name}")
             except Exception:
-                print(f"  ⚠️  ingest 失败，保留 sources/ 中的原始文件: {file_path.name}")
                 raise
-    
-    print("\n✅ 合入完成！")
 
 
 # ── arXiv patterns (shared with deep-read.py) ──
@@ -1273,23 +1235,49 @@ def extract_arxiv_id(text: str) -> str | None:
 
 
 def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
-    """Fetch arXiv paper content via arxiv2md."""
+    """Fetch arXiv paper content via arxiv2md, with retry + fallbacks."""
     tmp_dir.mkdir(parents=True, exist_ok=True)
     out_file = tmp_dir / f"arxiv-{arxiv_id}.md"
     if out_file.exists():
-        for f in tmp_dir.iterdir():
-            if f.suffix == '.md' and f.stem != out_file.stem and arxiv_id not in f.stem:
-                return f
         return out_file
 
+    # Check if raw/papers/ already has a substantial file for this arxiv_id
+    papers_dir = REPO_ROOT / "raw" / "papers"
+    if papers_dir.exists():
+        for existing in papers_dir.glob("*.md"):
+            if arxiv_id in existing.stem:
+                content = existing.read_text(encoding="utf-8")
+                if len(content) > 5000:
+                    return existing
+
+    # Try arxiv2md with retry on 429
+    import time
+    for attempt in range(3):
+        try:
+            from arxiv2md import ingest_paper_sync
+            result = ingest_paper_sync(arxiv_id)
+            import re as _re
+            content = _re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
+            out_file.write_text(content, encoding="utf-8")
+            renamed = rename_file_by_title(out_file)
+            return renamed
+        except ImportError:
+            break  # arxiv2md not installed, skip to fallback
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                wait = 10 * (attempt + 1)
+                import time as _time
+                _time.sleep(wait)
+            elif attempt < 2:
+                import time as _time
+                _time.sleep(5)
+            else:
+                pass
+    else:
+        # Reset for next fallback (avoid continuing in the for-else)
+        pass
     try:
         from arxiv2md import ingest_paper_sync
-        result = ingest_paper_sync(arxiv_id)
-        import re as _re
-        content = _re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
-        out_file.write_text(content, encoding="utf-8")
-        renamed = rename_file_by_title(out_file)
-        return renamed
     except ImportError:
         pass
     finally:
@@ -1297,7 +1285,44 @@ def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
         if cache_dir.exists():
             shutil.rmtree(cache_dir, ignore_errors=True)
 
-    # Fallback: fetch abstract from arXiv API
+    # Fallback 1: fetch HTML via webfetch (more complete than API abstract)
+    try:
+        import requests as _req
+        html_url = f"https://arxiv.org/html/{arxiv_id}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = _req.get(html_url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        # Try trafilatura for markdown extraction
+        text_content = resp.text
+        try:
+            import trafilatura
+            md = trafilatura.extract(text_content, include_comments=False, include_tables=True) or ""
+            if len(md) > 2000:
+                content = f"# arXiv {arxiv_id}\n\n{md}\n\nOriginal: https://arxiv.org/abs/{arxiv_id}\n"
+                out_file.write_text(content, encoding="utf-8")
+                renamed = rename_file_by_title(out_file)
+                return renamed
+        except ImportError:
+            pass
+        # Fallback within fallback: extract via regex from HTML
+        import re as _re2
+        body_match = _re2.search(r'<body[^>]*>(.*?)</body>', text_content, _re2.DOTALL)
+        if body_match:
+            body = body_match.group(1)
+            # Remove script/style
+            body = _re2.sub(r'<script[^>]*>.*?</script>', '', body, flags=_re2.DOTALL)
+            body = _re2.sub(r'<style[^>]*>.*?</style>', '', body, flags=_re2.DOTALL)
+            body = _re2.sub(r'<[^>]+>', ' ', body)
+            body = _re2.sub(r'\s+', ' ', body).strip()
+            if len(body) > 2000:
+                content = f"# arXiv {arxiv_id}\n\n{body}\n\nOriginal: https://arxiv.org/abs/{arxiv_id}\n"
+                out_file.write_text(content, encoding="utf-8")
+                renamed = rename_file_by_title(out_file)
+                return renamed
+    except Exception:
+        pass
+
+    # Fallback 2: fetch abstract from arXiv API
     try:
         import requests as _req
         url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
@@ -1386,14 +1411,12 @@ def run_direct_ingest(paper_input: str):
     is_url = paper_input.startswith('http')
 
     if arxiv_id:
-        print(f"📄 arXiv paper: {arxiv_id}")
         file_path = _refetch_arxiv(arxiv_id, tmp_dir)
         source_url = f"https://arxiv.org/abs/{arxiv_id}"
     elif is_pdf:
-        print(f"📄 PDF file: {paper_input}")
         pdf_path = Path(paper_input).resolve()
         if not pdf_path.exists():
-            print(f"❌ PDF not found: {pdf_path}")
+            print(f"Error: PDF not found: {pdf_path}")
             return
         import subprocess
         pdf2md_path = REPO_ROOT / "tools" / "pdf2md.py"
@@ -1402,7 +1425,7 @@ def run_direct_ingest(paper_input: str):
             capture_output=True, text=True, timeout=600,
         )
         if result.returncode != 0:
-            print(f"❌ pdf2md failed: {result.stderr}")
+            print(f"Error: pdf2md failed")
             return
         # Find generated md
         output_dir = pdf_path.parent / pdf_path.stem
@@ -1414,26 +1437,23 @@ def run_direct_ingest(paper_input: str):
                 file_path = f
                 break
         if not file_path:
-            # fallback: search for any md
             for f in pdf_path.parent.rglob("*.md"):
                 if f.stem == pdf_path.stem:
                     file_path = f
                     break
         if not file_path or not file_path.exists():
-            print(f"❌ pdf2md did not produce output for {pdf_path.name}")
+            print(f"Error: pdf2md did not produce output")
             return
         source_url = str(pdf_path)
     elif is_url:
-        print(f"🌐 Web page: {paper_input}")
         file_path = _refetch_web(paper_input, tmp_dir)
         source_url = paper_input
     else:
-        print(f"❌ Unrecognized input: {paper_input}")
-        print("   Supported: arxiv URL/ID, PDF path, or web URL")
+        print(f"Error: unrecognized input: {paper_input}")
         return
 
     if not file_path or not file_path.exists():
-        print(f"❌ Failed to fetch/convert content")
+        print(f"Error: failed to fetch content")
         return
 
     # Copy to raw/papers/ for persistent storage
@@ -1441,15 +1461,11 @@ def run_direct_ingest(paper_input: str):
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / file_path.name
     shutil.copy2(str(file_path), str(dest_path))
-    print(f"  → 保存到: {dest_path.relative_to(REPO_ROOT)}")
 
     # Inject source URL into frontmatter
     inject_source_url(dest_path, source_url)
 
     # Ingest directly
-    print(f"\n{'='*50}")
-    print(f"  开始直接合入 wiki...")
-    print(f"{'='*50}")
     ingest(str(dest_path), auto_convert=True)
 
 
@@ -1496,7 +1512,6 @@ if __name__ == "__main__":
         paper_idx = sys.argv.index("--paper")
         if paper_idx + 1 < len(sys.argv):
             paper_input = sys.argv[paper_idx + 1]
-            print(f"Direct paper ingest: {paper_input}")
             run_direct_ingest(paper_input)
             sys.exit(0)
         else:

@@ -32,6 +32,10 @@
 - [x] **`build_brief_from_json` 日期统一** → `filter.py`
 - [x] **`fetch-sources.py` 解析只处理 `####` 条目** + 支持 `--all` 批量
 - [x] **deep-read.py 各种修复** → 归档日期、图片 cleanup、TASK_DIR 导入、dedup 检查
+- [x] **`overview_update` 全量替换设计缺陷** → `ingest.py` 改为 `_append_to_overview()` 追加模式，不再依赖子代理返回完整内容
+- [x] **`--paper` 模式重复 fetch** → `_refetch_arxiv` 增加 429 重试 + webfetch HTML 降级 + 检查已有源文件
+- [x] **子代理结果协议不匹配** → `read_results()` 同时支持 `.txt` + `.json`（均需 `.done` 标记）；`read_result()` 同理
+- [x] **`ingest.py` `_SHARED_CONTEXT_PATH` 未初始化** → 已修复
 
 ### P2 修复
 - [x] **AGENTS.md 瘦身** → code-read 子代理模板（~200 行）外部化至 `docs/workflows/code-read.md`；trigger 表格外部化至 `docs/workflows/triggers.md`. 省 ~2500-3500 token/session
@@ -47,6 +51,22 @@
 - [x] **共享上下文文件缓存** → `ingest.py` `get_shared_ingest_context()`, 省 ~68KB/task
 - [x] **深度阅读源文件定位 + 输出路径 + 图片引用** → 多目录搜索、`{slug}.md` 独立文件、`images/` 子目录
 - [x] **概览/技术拆解重叠 + 图片选择 prompt** → 重写
+- [x] **arxiv2md 429 无重试** → `_refetch_arxiv` 增加指数退避重试（3 次）+ arxiv HTML webfetch 降级
+- [x] **子代理 prompt 过大导致指令遗漏** → 源文件 >20KB 时不内联，子代理自行 Read
+- [x] **`RESULT_DIR` 自动创建缺失** → `read_results()` 中增加自动创建
+- [x] **削减脚本 print 输出** → `ingest.py` 126→45 个 print（仅保留错误/CLI 帮助），`_utils.py` 5→0
+
+---
+
+## 待处理
+
+### P1 修复
+- (All P1 items resolved ✓)
+
+### P2 修复
+- [ ] **phase1/phase2 工作流对单篇论文过于复杂** → 考虑加 `--direct` 标志跳过文件协议，直接子代理处理
+- [ ] **Windows 路径转义问题** → `actor` 工具 prompt 中反斜杠导致 JSON 解析失败
+- [ ] **`ingest.py` 多处 Windows 兼容性** → `os.path.relpath`、Path 操作在 Windows 下产生反斜杠
 
 ---
 

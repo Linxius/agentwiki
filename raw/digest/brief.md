@@ -197,7 +197,7 @@ NeuMatEx 包含两个阶段。(a) 神经材质初始化：LMRM 单次前向预�
 - 匹配: 3D高斯泼溅, 网格重建, 表面重建
 - 理由: 基于3DGS的网格重建方法，专门解决高反射表面重建问题
 - [x] 深度阅读
-- [ ] 合入 wiki
+- [x] 合入 wiki
 - [ ] 不感兴趣
 
 ![从 Shiny Blender Synthetic 数据集上重建的反射物体 mesh，实验对比了 2DGS、GOF 和 PGSR 等方法](https://arxiv.org/html/2509.22276v2/figures/sota-reflective.jpg)
@@ -286,7 +286,7 @@ NeuMatEx 包含两个阶段。(a) 神经材质初始化：LMRM 单次前向预�
 - 匹配: 网格重建, 场景表示
 - 理由: 聚焦网格VAE拓扑统一和重建保真度，与网格重建和显式表示相关，但核心是生成而非新型视图合成或实时渲染
 - [x] 深度阅读
-- [ ] 合入 wiki
+- [x] 合入 wiki
 - [ ] 不感兴趣
 
 ![TopoMesh 包含两个核心模块](https://arxiv.org/html/2603.24278v2/x1.png)

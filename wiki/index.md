@@ -7,6 +7,7 @@ This file is maintained by the LLM. Updated on every ingest.
 
 ## Sources
 
+- [World Tracing](sources/world-tracing-generative-pixel-aligned-geometry-beyond-the-visible) — 像素对齐多层几何扩散，单图生成完整3D场景（可见+遮挡），SOTA 几何 F1
 ## Papers
 - [Rectified Flow](sources/rectified-flow) — Rectified Flow：学习直线轨迹 ODE 实现快速生成和传输
 ## Papers
@@ -29,6 +30,11 @@ This file is maintained by the LLM. Updated on every ingest.
 - [Snapdragon Game Super Resolution (SGSR)](sources/snapdragon-gsr.md) — 代码分析
 - [Volumetric Surfaces](sources/volumetric-surfaces.md) — 多层网格表示模糊几何的实时视图合成
 - [Adaptive Shells](sources/adaptive-shells.md) — 自适应窄带渲染加速 NeRF
+## Papers
+- [TopoMesh: High-Fidelity Mesh Autoencoding via Topological Unification](sources/topomesh.md) — 拓扑统一框架实现显式网格级 VAE 监督，锐边 F1 提升超 8%
+- [GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction](sources/gs-2m.md) — 材料感知联合优化，PBR + 多视角粗糙度监督实现反射表面高质量网格重建
+## Papers
+- [Surflo](sources/surflo.md) — 全局 latent + 流匹配实现前馈式任意密度 3D 表面重建，从无位姿多视图直接生成定向点云和网格
 ## Entities
 
 ## Concepts

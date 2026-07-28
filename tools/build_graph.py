@@ -36,7 +36,6 @@ try:
     HAS_NETWORKX = True
 except ImportError:
     HAS_NETWORKX = False
-    print("Warning: networkx not installed. Community detection disabled. Run: pip install networkx")
 
 from _utils import read_file, prepare_tasks, read_results, clean_task_dirs, TASK_DIR
 
@@ -239,8 +238,6 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
     checkpoint_edges, completed_ids = ([], set())
     if resume:
         checkpoint_edges, completed_ids = load_checkpoint()
-        if completed_ids:
-            print(f"  checkpoint: {len(completed_ids)} pages already done, {len(checkpoint_edges)} edges loaded")
 
     new_edges = list(checkpoint_edges)
 
@@ -272,13 +269,11 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
             changed_pages.append(p)
 
     if not changed_pages:
-        print("  no changed pages — skipping semantic inference")
         return new_edges
 
     total_pages = len(changed_pages)
     already_done = len(completed_ids)
     grand_total = total_pages + already_done
-    print(f"  inferring relationships for {total_pages} remaining pages (of {grand_total} total)...")
 
     # Build a summary of existing nodes for context
     node_list = "\n".join(f"- {page_id(p)} ({extract_frontmatter_type(read_file(p))})" for p in pages)
@@ -311,7 +306,6 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
             tid = f"graph_{src}"
             raw = results_map.get(tid, "")
             if not raw:
-                print(f"    [{src}] no result")
                 continue
             try:
                 raw = raw.strip()
@@ -357,7 +351,6 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
                     "edges": valid_rels,
                 }
                 append_checkpoint(src, page_edges)
-                print(f"    [{src}] Found {len(page_edges)} edges.")
             except (json.JSONDecodeError, TypeError, ValueError) as jde:
                 print(f"    [{src}] Invalid JSON: {str(jde)[:60]}")
             except Exception as e:
@@ -371,7 +364,6 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
         content = full_content[:2000]
         src = page_id(p)
         global_idx = already_done + i
-        print(f"    [{global_idx}/{grand_total}] Inferring for '{src}'... ", end="", flush=True)
 
         prompt = build_infer_prompt(src, content, node_list, existing_edge_summary)
         page_edges = []
@@ -423,12 +415,10 @@ def build_inferred_edges(pages: list[Path], existing_edges: list[dict], cache: d
                 "edges": valid_rels,
             }
             append_checkpoint(src, page_edges)
-            print(f"-> Found {len(page_edges)} edges.")
-        except (json.JSONDecodeError, TypeError, ValueError) as jde:
-            print(f"-> [WARN] Invalid JSON: {str(jde)[:60]}")
-        except Exception as e:
-            err_msg = str(e).replace('\n', ' ')[:80]
-            print(f"-> [ERROR] {err_msg}")
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        except Exception:
+            pass
 
     return new_edges
 
@@ -1277,28 +1267,22 @@ def build_graph(infer: bool = True, open_browser: bool = False, clean: bool = Fa
     today = date.today().isoformat()
 
     if not pages:
-        print("Wiki is empty. Ingest some sources first.")
         return
 
-    print(f"Building graph from {len(pages)} wiki pages...")
     GRAPH_DIR.mkdir(parents=True, exist_ok=True)
 
     # Clean checkpoint if requested
     if clean and INFERRED_EDGES_FILE.exists():
         INFERRED_EDGES_FILE.unlink()
-        print("  cleaned: removed inference checkpoint")
 
     cache = load_cache()
 
     # Pass 1: extracted edges
-    print("  Pass 1: extracting wikilinks...")
     nodes = build_nodes(pages)
     edges = build_extracted_edges(pages)
-    print(f"  → {len(edges)} extracted edges")
 
     # Pass 2: inferred edges
     if infer:
-        print("  Pass 2: inferring semantic relationships...")
         inferred = build_inferred_edges(pages, edges, cache, resume=not clean,
                                         phase1=phase1, phase2=phase2)
         edges.extend(inferred)
@@ -1307,13 +1291,9 @@ def build_graph(infer: bool = True, open_browser: bool = False, clean: bool = Fa
             save_cache(cache)
 
     # Deduplicate edges
-    before_dedup = len(edges)
     edges = deduplicate_edges(edges)
-    if before_dedup != len(edges):
-        print(f"  dedup: {before_dedup} → {len(edges)} edges")
 
     # Community detection
-    print("  Running Louvain community detection...")
     communities = detect_communities(nodes, edges)
     for node in nodes:
         comm_id = communities.get(node["id"], -1)
@@ -1332,12 +1312,10 @@ def build_graph(infer: bool = True, open_browser: bool = False, clean: bool = Fa
     # Save graph.json
     graph_data = {"nodes": nodes, "edges": edges, "built": today}
     GRAPH_JSON.write_text(json.dumps(graph_data, indent=2, ensure_ascii=False))
-    print(f"  saved: graph/graph.json  ({len(nodes)} nodes, {len(edges)} edges)")
 
     # Save graph.html
     html = render_html(nodes, edges)
     GRAPH_HTML.write_text(html, encoding="utf-8")
-    print(f"  saved: graph/graph.html")
 
     n_ext = len([e for e in edges if e['type']=='EXTRACTED'])
     n_inf = len([e for e in edges if e['type'] in ('INFERRED', 'AMBIGUOUS')])
@@ -1345,16 +1323,12 @@ def build_graph(infer: bool = True, open_browser: bool = False, clean: bool = Fa
 
     # Generate health report
     if report:
-        if not HAS_NETWORKX:
-            print("Warning: networkx not installed. Cannot generate report.")
-        else:
-            report_text = generate_report(nodes, edges, communities, pages=pages)
-            print("\n" + report_text)
-            if save:
-                report_path = GRAPH_DIR / "graph-report.md"
-                report_path.write_text(report_text, encoding="utf-8")
-                print(f"  saved: {report_path.relative_to(REPO_ROOT)}")
-            append_log(f"## [{today}] report | Graph health report generated\n\n{len(nodes)} nodes analyzed.")
+        report_text = generate_report(nodes, edges, communities, pages=pages)
+        print("\n" + report_text)
+        if save:
+            report_path = GRAPH_DIR / "graph-report.md"
+            report_path.write_text(report_text, encoding="utf-8")
+        append_log(f"## [{today}] report | Graph health report generated\n\n{len(nodes)} nodes analyzed.")
 
     if open_browser:
         webbrowser.open(f"file://{GRAPH_HTML.resolve()}")

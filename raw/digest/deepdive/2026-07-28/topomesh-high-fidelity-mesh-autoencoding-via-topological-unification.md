@@ -15,6 +15,8 @@
 
 ---
 
+评论：其实就是换了个表达方式来进行学习（Dual Marching Cubes（DMC）这个可以额外加个wiki词条）
+
 ## 论文概览
 
 ### 1. 问题与背景
@@ -221,4 +223,4 @@ Ablation 关键发现：
 5. **SOTA 效果**: 锐边 F1 提升超 8%，Chamfer Distance 降低超 30%，为 VAE-Diffusion 管线奠定了更强的重建基础
 
 ---
-- [ ] 合入 wiki
+- [x] 合入 wiki

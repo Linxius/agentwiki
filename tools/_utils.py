@@ -49,23 +49,14 @@ def call_llm(prompt, max_tokens=8192):
     import hashlib
     task_id = f"auto_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
     prepare_task(task_id, prompt, max_tokens)
-    print(f"📤 自动创建 task: {task_id} (phase1)")
-    print(f"   请查看 {TASK_DIR}/{task_id}.json")
-    print(f"   agent spawn 子代理处理后运行 --phase2")
     return ""
 
 
 def auto_call_or_phase1(prompt: str, max_tokens: int = 8192, task_id: str = "auto") -> str:
-    """If --phase1 is set, write task and return ''; if --phase2, read result; else auto-create task.
-    
-    Returns the result string (empty if task was created).
-    """
     import hashlib
     if '--phase2' in sys.argv:
         return read_result(task_id)
     tid = task_id if task_id != "auto" else f"auto_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
-    if '--phase1' not in sys.argv:
-        print(f"  ⚠️  无 --phase1/--phase2 标志，自动创建 task: {tid}")
     call_llm(prompt, max_tokens)
     return ""
 
@@ -127,15 +118,15 @@ def prepare_tasks(tasks: list[dict]) -> Path:
         })
     manifest_path = TASK_DIR / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"📤 {len(tasks)} 个任务已写入 {TASK_DIR}")
     return manifest_path
 
 
 def read_result(task_id: str) -> str:
-    """Read result content from file."""
-    result_file = RESULT_DIR / f"{task_id}.txt"
-    if result_file.exists():
-        return result_file.read_text(encoding="utf-8")
+    """Read result content from file (supports .txt and .json)."""
+    for ext in (".txt", ".json"):
+        result_file = RESULT_DIR / f"{task_id}{ext}"
+        if result_file.exists():
+            return result_file.read_text(encoding="utf-8")
     return ""
 
 
@@ -156,16 +147,18 @@ def write_result(task_id: str, content: str):
 def read_results() -> dict[str, str]:
     """Read all results from RESULT_DIR. Returns {task_id: content}.
     
-    Only returns results that have a matching .done marker, to avoid
-    race conditions with subagents still writing.
+    Supports both .txt and .json result files (with matching .done marker).
+    Auto-creates RESULT_DIR if it doesn't exist.
     """
     results = {}
     if not RESULT_DIR.exists():
+        RESULT_DIR.mkdir(parents=True, exist_ok=True)
         return results
-    for f in RESULT_DIR.glob("*.txt"):
-        done = RESULT_DIR / f"{f.stem}.done"
-        if done.exists():
-            results[f.stem] = f.read_text(encoding="utf-8")
+    for pattern in ("*.txt", "*.json"):
+        for f in RESULT_DIR.glob(pattern):
+            done = RESULT_DIR / f"{f.stem}.done"
+            if done.exists():
+                results[f.stem] = f.read_text(encoding="utf-8")
     return results
 
 

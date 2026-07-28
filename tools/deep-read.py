@@ -736,15 +736,11 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
     if brief_content.strip() and brief_content.strip() != "# 资讯简报":
         if archive_path.exists():
             existing_text = archive_path.read_text(encoding="utf-8")
-            if content_hash in existing_text:
-                print(f"  brief.md 内容未变化（哈希 {content_hash}），跳过归档")
-            else:
+            if content_hash not in existing_text:
                 archived = existing_text + "\n\n---\n\n" + brief_content + f"\n\n**归档于: {brief_date}  哈希: {content_hash}**\n"
                 archive_path.write_text(archived, encoding="utf-8")
-                print(f"  brief.md 已追加归档到 {archive_path.relative_to(REPO_ROOT)}")
         else:
             archive_path.write_text(brief_content, encoding="utf-8")
-            print(f"  brief.md 已归档到 {archive_path.relative_to(REPO_ROOT)}")
     # Do NOT clear brief.md — preserve checkbox state for future operations
 
     # Find checked entries
@@ -800,7 +796,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
             disinterest_entries = find_disinterested_entries(brief_content)
 
     if disinterest_entries:
-        print(f"\n发现 {len(disinterest_entries)} 个标记为「不感兴趣」的条目:")
 
         if "--phase1" in sys.argv:
             # Phase 1: accumulate disinterest tasks; deep-read tasks will be added below
@@ -813,7 +808,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                     "max_tokens": 1024,
                     "metadata": {"title": de['title']},
                 })
-            print(f"  已添加 {len(disinterest_entries)} 个不感兴趣分析任务")
 
         if "--phase2" in sys.argv:
             # Phase 2: read results
@@ -836,23 +830,17 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
             clean_task_dirs()
         else:
             # Normal mode: direct LLM calls
-            print("正在分析并生成兴趣/排除列表更新建议...\n")
             suggestions = []
             for de in disinterest_entries:
                 suggestion = generate_disinterest_suggestion(de)
                 suggestions.append(suggestion)
-                print(f"  [{de['title']}]")
                 elements = suggestion.get('interest_elements', [])
                 if elements:
-                    print(f"    不感兴趣元素: {' + '.join(elements)}")
                     print(f"    原因: {suggestion.get('element_reasoning', '')}")
                 if suggestion.get('suggested_action') == 'add_disinterest':
                     kw = ', '.join(suggestion.get('disinterest_keywords', []))
                     name = suggestion.get('disinterest_name', '')
-                    print(f"    💡 建议新增排除项: {name} [{kw}]")
                     print(f"    理由: {suggestion.get('reasoning', '')}")
-                else:
-                    print(f"    无需更新 interests.md: {suggestion.get('reasoning', '')}")
                 print()
 
         if not json_output:
@@ -874,25 +862,14 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                 sug_line += f"- 理由: {s.get('reasoning', '')}\n"
                 sug_line += "\n"
             write_file(sug_path, sug_line)
-            print(f"  建议已保存至: {sug_path.relative_to(REPO_ROOT)}\n")
 
     # ── Check for deep-read entries ──
     if not entries:
-        print("No entries marked for deep-read.")
-        if date_str:
-            print(f"  Check brief.md for entries with [x] 深度阅读 on {date_str}")
-        elif file_name:
-            print(f"  Check brief.md for entry '{file_name}' with [x] 深度阅读")
-        else:
-            print("  Check brief.md for entries with [x] 深度阅读")
         if not disinterest_entries:
             return
         # If only disinterested entries, we're done
-        if not entries:
-            print("\n✅ 不感兴趣条目分析完成。")
-            return
+        return
 
-    print(f"Found {len(entries)} entries marked for deep-read.\n")
 
     # Use brief_date from header (detected above in archive block) for all date-sensitive paths
     today = brief_date  # instead of date.today().isoformat() -- preserves source date
@@ -915,14 +892,12 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                 # Match "## Title" header in deepdive.md
                 existing_titles = re.findall(r'^## (.+)$', existing_content, re.MULTILINE)
                 if any(title.strip() == t.strip() for t in existing_titles):
-                    print(f"  ⏭️  {title} — 已存在于 {existing_deepdive.relative_to(REPO_ROOT)}，跳过")
                     continue
             # Fallback: if deepdive.md doesn't have the title but standalone file exists
             if not existing_deepdive.exists():
                 slug = safe_title.lower().replace('__', '-').replace('_', '-')
                 standalone = DAILY_DIR / "deepdive" / date_key / f"{slug}.md"
                 if standalone.exists():
-                    print(f"  ⏭️  {title} — 已存在于 {standalone.relative_to(REPO_ROOT)}，跳过")
                     continue
 
             # Prepare paths
@@ -998,7 +973,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
         clean_task_dirs()
     else:
         # Normal mode: use existing phase1 logic to prepare tasks, then return
-        print("  ↪ 自动转为 phase1 模式")
         # Jump to phase1 logic by re-executing the phase1 block
         _phase1_tasks = []
         for entry in entries:
@@ -1011,7 +985,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                 existing_content = existing_deepdive.read_text(encoding="utf-8")
                 existing_titles = re.findall(r'^## (.+)$', existing_content, re.MULTILINE)
                 if any(title.strip() == t.strip() for t in existing_titles):
-                    print(f"  ⏭️  {title} — 已存在，跳过")
                     continue
             base_dir = DAILY_DIR / "deepdive" / date_key
             downloaded_images = []
@@ -1051,7 +1024,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
         return
         for entry in entries:
             title = entry['title']
-            print(f"Processing: {title}")
 
             # Find source file
             file_path, source_date = _find_source_file(entry, today)
@@ -1069,7 +1041,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                 all_imgs = extract_images(content)
                 if all_imgs:
                     image_dir = base_dir / "images"
-                    print(f"  Found {len(all_imgs)} images in source")
                     url_imgs = [(a, u, c) for a, u, c in all_imgs if u.startswith("http")]
                     local_imgs = [(a, u, c) for a, u, c in all_imgs if not u.startswith("http")]
                     if url_imgs:
@@ -1080,21 +1051,17 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                         if sources_img_dir.exists():
                             cl = copy_local_images(local_imgs, sources_img_dir, image_dir, safe_title)
                             downloaded_images.extend(cl)
-                    if downloaded_images:
-                        print(f"    Acquired {len(downloaded_images)} images for LLM selection")
-                    else:
+                    if not downloaded_images:
                         shutil.rmtree(image_dir, ignore_errors=True)
                         image_dir = None
 
             if file_path and file_path.exists():
-                print(f"  Source: {file_path.relative_to(REPO_ROOT)}")
                 deep_report = generate_deepdive(
                     file_path, title, entry['brief'],
                     prefix=safe_title, downloaded_images=downloaded_images,
                 )
 
             else:
-                print(f"  ⚠️  Source not found, generating from brief only")
                 detailed_report = ''
                 detailed_match = re.search(r'\*\*详细报告\*\*：(.+?)(?=\n\n|\n###|$)', entry['entry_lines'], re.DOTALL)
                 if detailed_match:
@@ -1103,7 +1070,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
                                                               source_url=entry.get('source_url', ''))
 
             by_date[date_key].append((safe_title, deep_report, image_dir, title))
-            print(f"    ✓ {title}")
 
     # ── Write individual per-paper files + combined deepdive.md ──
     for date_key, date_results in by_date.items():
@@ -1132,22 +1098,18 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
 - [ ] 合入 wiki
 """
             out_path.write_text(content, encoding="utf-8")
-            print(f"  ✅ {out_path.relative_to(REPO_ROOT)}")
             combined_sections.append(f"## {title}\n\n[→ 阅读全文]({slug}.md)\n- [ ] 合入 wiki")
 
         # Also write combined deepdive.md as an index
         combined_path = date_dir / "deepdive.md"
         combined = f"# 深度阅读报告  {date_key}\n\n" + "\n\n---\n\n".join(combined_sections)
         combined_path.write_text(combined, encoding="utf-8")
-        print(f"  ✅ {combined_path.relative_to(REPO_ROOT)} (索引)")
 
         # Cleanup unused images
         if images_dir.exists():
             cleanup_deepdive_images(combined, images_dir)
             remaining = [f.name for f in images_dir.iterdir()] if images_dir.exists() else []
-            if remaining:
-                print(f"    Images kept: {len(remaining)} in images/")
-            else:
+            if not remaining:
                 shutil.rmtree(images_dir, ignore_errors=True)
 
     # brief.md was archived and cleared at start — don't restore old entries
@@ -1160,8 +1122,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
 
     # Summary
     total = sum(len(v) for v in by_date.values())
-    print(f"\n{'='*50}")
-    print(f"✅ Deep-read generation complete! {total} entries in {len(by_date)} date(s).")
     for date_key, date_results in by_date.items():
         for _, _, _, title in date_results:
             print(f"  + {title}")
@@ -1180,12 +1140,10 @@ def run_direct_read(paper_input: str):
     is_url = paper_input.startswith('http')
 
     if arxiv_id:
-        print(f"📄 arXiv paper: {arxiv_id}")
         tmp_dir = base_dir / "deepdive" / ".tmp"
         file_path = _refetch_arxiv(arxiv_id, tmp_dir)
         source_url = f"https://arxiv.org/abs/{arxiv_id}"
     elif is_pdf:
-        print(f"📄 PDF file: {paper_input}")
         pdf_path = Path(paper_input).resolve()
         if not pdf_path.exists():
             print(f"❌ PDF not found: {pdf_path}")
@@ -1209,7 +1167,6 @@ def run_direct_read(paper_input: str):
             return
         source_url = str(pdf_path)
     elif is_url:
-        print(f"🌐 Web page: {paper_input}")
         tmp_dir = base_dir / "deepdive" / ".tmp"
         file_path = _refetch_web(paper_input, tmp_dir)
         source_url = paper_input
@@ -1226,8 +1183,6 @@ def run_direct_read(paper_input: str):
     title_match = re.search(r"^#\s+(.+)", content, re.MULTILINE)
     title = title_match.group(1).strip() if title_match else file_path.stem
 
-    print(f"  Title: {title}")
-    print(f"  Generating deep-dive report...")
 
     # Extract and download images
     all_imgs = extract_images(content)
@@ -1277,7 +1232,6 @@ def run_direct_read(paper_input: str):
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    print(f"\n✅ 报告已保存: {out_path.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":

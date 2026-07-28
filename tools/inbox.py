@@ -458,7 +458,6 @@ def is_local_path(text: str) -> bool:
 def process_code(item: dict, out_dir: Path) -> str | None:
     """Log a git/local item for agent subagent handling (no direct LLM call)."""
     link = item["link"]
-    print(f"  [code] {link} — 待子代理处理")
     return None
 
 
@@ -587,7 +586,7 @@ def _fetch_arxiv_api(arxiv_id: str) -> str:
             if tmp.exists():
                 tmp.unlink()
 
-    return f"# arXiv: {arxiv_id}\n\n[arxiv2md not installed — try: pip install git+https://github.com/timf34/arxiv2md.git]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}"
+    return f"# arXiv: {arxiv_id}\n\n[arxiv2md not installed — try: pip install git+https://github.com/Linxius/arxiv2md.git]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}"
 
 
 # ─── Slug generation ────────────────────────────────────────────────
@@ -744,7 +743,6 @@ def scan_and_convert_local_files() -> list[str]:
 
         # Skip if already converted (companion .md exists in same dir)
         if (file_path.parent / f"{file_path.stem}.md").exists():
-            print(f"  [{ext[1:]}] {rel} -> skip (already converted)")
             file_path.unlink()
             continue
 
@@ -756,7 +754,6 @@ def scan_and_convert_local_files() -> list[str]:
                 out = _convert_pdf(file_path)
                 if out and out.exists():
                     converted.append(str(out.relative_to(REPO_ROOT)))
-                    print(f"    -> {out.relative_to(REPO_ROOT)}")
                     file_path.unlink()
                     continue
             elif ext in (".html", ".htm"):
@@ -766,13 +763,11 @@ def scan_and_convert_local_files() -> list[str]:
             elif ext in (".txt", ".text", ".rst"):
                 ok = _copy_text_file(file_path, out_file)
             else:
-                print(f"    SKIP (unsupported: {ext})")
                 continue
 
             if ok and out_file.exists():
                 file_path.unlink()
                 converted.append(str(out_file.relative_to(REPO_ROOT)))
-                print(f"    -> {out_file.relative_to(REPO_ROOT)}")
             else:
                 print(f"    FAILED")
         except Exception as e:
@@ -848,7 +843,6 @@ def process_link(item: dict, out_dir: Path) -> str:
     if item_type in ("git", "local"):
         return process_code(item, out_dir)
     elif item_type == "arxiv":
-        print(f"  [arXiv] {link}")
         arxiv_id = extract_arxiv_id(link) or link
         # Output to subdirectory: file_dir/arxiv-{id}/paper.md + figures/
         arxiv_dir = file_dir / f"arxiv-{arxiv_id.replace('.', '')}"
@@ -873,7 +867,6 @@ def process_link(item: dict, out_dir: Path) -> str:
 
         return out_file
     else:
-        print(f"  [web] {link}")
         content = page_to_markdown(link)
         suffix = ".md"
 
@@ -889,8 +882,6 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
     # ── Step 1: inbox.md links ──
     items = read_inbox_md()
     if items:
-        print(f"Found {len(items)} link(s) in {INBOX_MD}")
-        print("-" * 40)
 
         out_dir = INBOX_DIR
         for item in items:
@@ -898,7 +889,6 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
                 saved_file = process_link(item, out_dir)
                 if saved_file is not None:
                     saved.append(str(saved_file.relative_to(REPO_ROOT)))
-                    print(f"    -> {saved_file.relative_to(REPO_ROOT)}")
             except Exception as e:
                 print(f"    FAILED: {e}")
 
@@ -910,18 +900,10 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
             content = re.sub(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+\s*\n?', '', content, flags=re.MULTILINE)
             content = re.sub(r'\n{3,}', '\n\n', content)
             INBOX_MD.write_text(content, encoding="utf-8")
-            print("-" * 40)
-            print(f"Cleared {INBOX_MD}")
-    else:
-        print(f"No links found in {INBOX_MD}")
 
     # ── Step 2: local files ──
     if not no_scan:
-        local = scan_and_convert_local_files()
-        if local:
-            print(f"\nConverted {len(local)} local file(s)")
-        else:
-            print(f"\nNo local files to convert")
+        scan_and_convert_local_files()
 
     return saved
 
@@ -969,7 +951,6 @@ def dedup_inbox_md():
     INBOX_MD.write_text(content, encoding="utf-8")
 
     after = len(items)
-    print(f"✅ inbox.md 已去重: {before} 行 → {after} 条独立条目")
     print(f"   文件: {INBOX_MD.relative_to(REPO_ROOT)}")
 
 
@@ -1007,8 +988,6 @@ def main():
             print(f"Local files in inbox/ ({len(found)}):")
             for f in found:
                 print(f"  {f}")
-        else:
-            print("No local files found in inbox/")
         return
 
     if args.dedup:

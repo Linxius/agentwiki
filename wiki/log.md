@@ -1,3 +1,5 @@
+## [2026-07-28] ingest | World Tracing: Generative Pixel-Aligned Geometry Beyond the Visible
+
 ## [2026-07-28] ingest | Rectified Flow
 
 Added source. Key claims: Rectified Flow 通过学习直线轨迹的 ODE 实现两个分布间的传输映射，Reflow 过程进一步直化轨迹，可实现单步 Euler 生成。
@@ -97,6 +99,20 @@ Added source. Key claims: 视图无关哈希网格烘焙为纹理图集消除神
 
 # Wiki Log
 
+## [2026-07-28] ingest | TopoMesh: High-Fidelity Mesh Autoencoding via Topological Unification
+
+- Source: https://arxiv.org/abs/2603.24278
+- Category: papers
+- Tags: mesh-autoencoding, VAE, topological-unification, dual-marching-cubes, 3d-generation
+- Key claims: (1) 拓扑统一范式使 GT 和预测网格共享 DMC 拓扑，首次实现顶点/面级显式监督；(2) Topo-Remesh 全 GPU 加速 + L∞ 度量，15 秒 1024³ 重网格；(3) 稀疏体素-点交叉注意力压缩注意力图 74GB→3.8MB；(4) Teacher Forcing + 渐进分辨率稳定训练；(5) 锐边 F1 提升超 8%（0.932 vs 0.873），CD 降低超 30%
+
+## [2026-07-28] ingest | GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
+
+- Source: https://arxiv.org/abs/2509.22276
+- Category: papers
+- Tags: 3dgs, mesh-reconstruction, material-decomposition, pbr, neural-rendering
+- Key claims: (1) 材料-网格联合优化框架，每个高斯体增加 albedo + roughness 可学习参数；(2) 多视角 NCC 粗糙度监督完全消除神经组件依赖；(3) 遮挡感知滤波 + 多视角法线一致性增强几何鲁棒性；(4) DTU CD 0.53 与 SOTA 持平，Shiny Blender 反射表面显著优于 2DGS/GOF/PGSR；(5) 训练 51min（完整版）/ 22.4min（无 BRDF 版）
+
 ## [2026-07-26] ingest | Volumetric Surfaces
 - Source: https://arxiv.org/abs/2409.02482
 - Category: papers
@@ -111,3 +127,9 @@ Added source. Key claims: 视图无关哈希网格烘焙为纹理图集消除神
 - Source: https://arxiv.org/abs/2606.26715
 - Category: papers
 - Tags: neural-materials, inverse-rendering, differentiable-rendering, material-extraction
+
+## [2026-07-28] ingest | Surflo: Consistent 3D Surface Flow Model with Global State
+- Source: https://arxiv.org/abs/2606.13644
+- Category: papers
+- Tags: surface-reconstruction, flow-matching, feed-forward-3d, global-latent, multi-view-3d
+- Key claims: 前馈式 3D 表面重建，用 Perceiver 压缩多视图为固定大小全局 latent，流匹配解码为任意密度定向点云，推理时渲染引导保证一致性。8 个基准匹配或超越 SOTA，比优化方法快一个数量级。

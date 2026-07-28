@@ -913,29 +913,6 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
     print(f"📊 结果: {len(interested)} 感兴趣, {len(possibly)} 可能感兴趣, {len(not_interested)} 不感兴趣")
 
     # Collect suggestions
-    suggested_interests = []
-    suggested_disinterests = []
-    seen_interest_names = set()
-    seen_disinterest_names = set()
-    for r in results:
-        for si in r.get("suggested_new_interests", []):
-            if isinstance(si, str):
-                name = si
-            else:
-                name = si.get("name", "")
-            if name and name not in seen_interest_names:
-                seen_interest_names.add(name)
-                suggested_interests.append(si)
-        for sd in r.get("suggested_new_disinterests", []):
-            if isinstance(sd, str):
-                name = sd
-            else:
-                name = sd.get("name", "")
-            if name and name not in seen_disinterest_names:
-                seen_disinterest_names.add(name)
-                suggested_disinterests.append(sd)
-
-    # Detect source date from actual file paths rather than date.today()
     sources_dir = DIGEST_DIR / "sources"
     source_date = date.today().isoformat()
     for item in results:
@@ -1058,8 +1035,6 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
         rel = str(file_path.relative_to(REPO_ROOT))
         if rel in cache:
             skipped_from_cache += 1
-            n = len(cache[rel])
-            print(f"  ⏭️  {file_path.name} ({n} 条，已缓存)")
         else:
             pending.append((file_path, rel))
 
@@ -1104,14 +1079,11 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
                     cache[rel] = serialized
                     save_filter_cache(cache)
                     skipped_disinterest += 1
-                    print(f"  ⏭️  {fp.name} (排除列表命中, 跳过 LLM)")
                 else:
                     filtered_pending.append((fp, rel))
             pending = filtered_pending
 
     if pending:
-        print(f"\n需分析 {len(pending)} 个文件:\n")
-
         # ── Phase 1: write prompts to files for subagents ──
         if "--phase1" in sys.argv:
             tasks = []
@@ -1129,7 +1101,6 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
         # ── Phase 2: read results from subagents ──
         if "--phase2" in sys.argv:
             results_map = read_results()
-            print(f"📥 读取 {len(results_map)} 个结果")
             for fp, rel in pending:
                 tid = rel.replace("/", "_").replace("\\", "_")
                 raw = results_map.get(tid, "")
@@ -1146,8 +1117,6 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
                         serialized.append(item)
                     cache[rel] = serialized
                     save_filter_cache(cache)
-                    for r in file_results:
-                        print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
                 except Exception as e:
                     print(f"  ⚠️  {fp.name} parse failed: {e}")
                     failed_files.add(rel)
@@ -1171,13 +1140,11 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
                             serialized.append(item)
                         cache[rel] = serialized
                         save_filter_cache(cache)
-                        for r in file_results:
-                            print(f"    → {r['file'].name}: {r['match_level']} ({r['suggested_category']})")
                     except Exception as e:
                         print(f"  ⚠️  {fp.name} failed: {e}")
                         failed_files.add(rel)
     else:
-        print(f"\n所有文件均已缓存（{skipped_from_cache} 个）。")
+        pass
 
     # Rebuild full results from cache (skips cached failures)
     results = rebuild_results_from_cache(cache)

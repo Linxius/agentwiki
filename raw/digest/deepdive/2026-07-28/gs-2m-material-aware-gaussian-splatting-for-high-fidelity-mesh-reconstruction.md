@@ -2,6 +2,8 @@
 
 # GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction — 深度阅读报告
 
+评论：利用多视觉之间的一致性来判断是否反光区域，调节粗糙度的惩罚。
+
 ## 论文概览
 
 ### 1. 问题与背景
@@ -195,4 +197,4 @@ L = L_plane + L_alpha + L_dn + L_mv + L_tv + L_sm + L_ro + L_pbr
 GS-2M 的创新在于**用极简的材料参数 + 多视角光度变化先验**，在 3DGS 显式重建框架中统一了网格重建和材料分解两个任务。其主要优势是：不依赖任何神经组件/预训练先验，保持快速训练（~51 分钟）的同时，既能处理漫反射表面达到 SOTA，又能良好应对高反光表面。核心代价是 PBR 延迟渲染带来的加倍训练时间（22min → 51min），以及对物体中心场景的适用性限制。
 
 ---
-- [ ] 合入 wiki
+- [x] 合入 wiki

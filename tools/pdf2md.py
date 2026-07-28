@@ -84,15 +84,11 @@ def convert_arxiv(arxiv_id: str, output: Path) -> Path:
         sys.exit(1)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["arxiv2md", arxiv_id, "-o", str(output)]
-    print(f"  Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
+    result = subprocess.run(["arxiv2md", arxiv_id, "-o", str(output)])
 
     if result.returncode != 0:
         print(f"Error: arxiv2md failed with exit code {result.returncode}")
         sys.exit(1)
-
-    print(f"  ✓ Converted arXiv {arxiv_id} → {output.relative_to(REPO_ROOT)}")
 
     # Normalize malformed arxiv HTML URLs (doubled /html/ prefix) in the output
     if output.exists():
@@ -100,7 +96,6 @@ def convert_arxiv(arxiv_id: str, output: Path) -> Path:
         fixed = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', raw)
         if fixed != raw:
             output.write_text(fixed, encoding="utf-8")
-            print(f"  ✓ Normalized {raw.count('//html/') - fixed.count('//html/')} malformed URLs")
 
     # Clean up arxiv2md cache
     cache_dir = REPO_ROOT / ".arxiv2md_cache"
@@ -122,9 +117,7 @@ def convert_marker(pdf_path: Path, output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     # marker outputs to a directory; we move the result to the target path
     tmp_dir = output.parent / f".marker_tmp_{output.stem}"
-    cmd = ["marker_single", str(pdf_path), "--output_dir", str(tmp_dir)]
-    print(f"  Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
+    result = subprocess.run(["marker_single", str(pdf_path), "--output_dir", str(tmp_dir)])
 
     if result.returncode != 0:
         print(f"Error: marker failed with exit code {result.returncode}")
@@ -140,7 +133,6 @@ def convert_marker(pdf_path: Path, output: Path) -> Path:
     md_files[0].rename(output)
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    print(f"  ✓ Converted {pdf_path.name} → {output.relative_to(REPO_ROOT)}")
     return output
 
 
@@ -159,7 +151,6 @@ def convert_pymupdf(pdf_path: Path, output: Path) -> Path:
     md_text = pymupdf4llm.to_markdown(str(pdf_path))
     output.write_text(md_text, encoding="utf-8")
 
-    print(f"  ✓ Converted {pdf_path.name} → {output.relative_to(REPO_ROOT)}")
     return output
 
 
@@ -173,9 +164,7 @@ def convert_mineru(pdf_path: Path, output: Path) -> Path:
 
     tmp_dir = output.parent / f".mineru_tmp_{output.stem}"
     env = os.environ.copy()
-    cmd = ["mineru", "-p", str(pdf_path), "-o", str(tmp_dir), "--method", "ocr"]
-    print(f"  Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, env=env)
+    result = subprocess.run(["mineru", "-p", str(pdf_path), "-o", str(tmp_dir), "--method", "ocr"], env=env)
 
     if result.returncode != 0:
         print(f"Error: mineru failed with exit code {result.returncode}")
@@ -217,7 +206,6 @@ def convert_mineru(pdf_path: Path, output: Path) -> Path:
     # Clean up temp directory
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    print(f"  ✓ Converted {pdf_path.name} → {final_dir.relative_to(REPO_ROOT)}/")
     return final_dir / f"{title_slug}.md"
 
 
@@ -292,17 +280,9 @@ def main():
 
     output = resolve_output(args.input, arxiv_id, args.output, backend)
 
-    print(f"\npdf2md — LLM Wiki Agent")
-    print(f"  Input:   {args.input}")
-    print(f"  Backend: {backend}")
-
     # ── Check if already converted ──
     if output.exists():
-        print(f"\nAlready converted: {output.relative_to(REPO_ROOT)}")
         return
-
-    print(f"  Backend: {backend}")
-    print()
 
     # ── Dispatch ──
     if backend == "arxiv2md":
@@ -316,8 +296,6 @@ def main():
             print(f"Error: file not found: {args.input}")
             sys.exit(1)
         BACKENDS[backend](pdf_path, output)
-
-    print(f"\nDone: {output.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":

@@ -303,7 +303,7 @@ python tools/file_to_md.py --input_dir raw/imports/ --delete_source  # remove or
 | Package | Install | Used for |
 |---|---|---|
 | [markitdown](https://github.com/microsoft/markitdown) | `pip install markitdown` | Auto-conversion of non-.md files (required for multi-format ingest) |
-| [arxiv2md](https://github.com/ryansingman/arxiv2md) | `pip install arxiv2markdown` | arXiv papers via structured source |
+| [arxiv2md](https://github.com/Linxius/arxiv2md) | `pip install git+https://github.com/Linxius/arxiv2md.git` | arXiv papers via structured source |
 | [Marker](https://github.com/VikParuchuri/marker) | `pip install marker-pdf` | Complex academic PDFs with multi-column layouts |
 | [PyMuPDF4LLM](https://github.com/pymupdf/RAG) | `pip install pymupdf4llm` | Fast PDF extraction (no GPU needed) |
 | [tqdm](https://github.com/tqdm/tqdm) | `pip install tqdm` | Progress bar for batch directory conversion |

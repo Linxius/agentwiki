@@ -95,19 +95,14 @@ def clone_repo(url: str, dest: Path = None) -> Path:
         name = repo_name_from_url(url)
         dest = CODES_DIR / name
     if dest.exists():
-        print(f"目录已存在，跳过 clone: {dest}", file=sys.stderr)
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    print(f"正在 clone: {url}", file=sys.stderr)
-    print(f"目标: {dest}", file=sys.stderr)
     result = subprocess.run(
         ["git", "clone", "--depth", "1", url, str(dest)],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        print(f"clone 失败:\n{result.stderr}", file=sys.stderr)
         sys.exit(1)
-    print("clone 完成", file=sys.stderr)
     return dest
 
 
@@ -117,7 +112,6 @@ def collect_code_files(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
     if not path.is_dir():
-        print(f"错误: 路径不存在 — {path}", file=sys.stderr)
         sys.exit(1)
     files = []
     for f in sorted(path.rglob("*")):
@@ -126,7 +120,6 @@ def collect_code_files(path: Path) -> list[Path]:
                 continue
             files.append(f)
     if not files:
-        print(f"错误: 目录中未找到代码文件 — {path}", file=sys.stderr)
         sys.exit(1)
     return files
 
@@ -165,20 +158,15 @@ def cmd_collect(args):
             git_url = urls.pop(0)
             target = clone_repo(git_url, target)
             tasks.append((target, git_url))
-        else:
-            print(f"跳过: 路径不存在且无 git URL — {p}", file=sys.stderr)
 
     for u in urls:
         target = clone_repo(u)
         tasks.append((target, u))
 
     for target, source_url in tasks:
-        print(f"处理: {target}", file=sys.stderr)
         files = collect_code_files(target)
-        print(f"找到 {len(files)} 个代码文件", file=sys.stderr)
 
         source_text = read_source(files)
-        print(f"源码总长度: {len(source_text)} 字符", file=sys.stderr)
 
         source_path = str(target.relative_to(REPO_ROOT)) if target.is_relative_to(REPO_ROOT) else str(target)
 
@@ -192,7 +180,6 @@ def cmd_collect(args):
         output = json.dumps(result, ensure_ascii=False, indent=2)
         if args.output:
             Path(args.output).write_text(output, encoding="utf-8")
-            print(f"已写入: {args.output}", file=sys.stderr)
         else:
             print(output)
 
@@ -339,15 +326,11 @@ def cmd_write(args):
 
     out_path = WIKI_DIR / "sources" / f"{slug}.md"
     write_file(out_path, page)
-    print(f"已写入: {out_path}", file=sys.stderr)
 
     update_index(slug, title)
-    print(f"已更新 index.md", file=sys.stderr)
 
     append_log(title)
-    print(f"已更新 log.md", file=sys.stderr)
 
-    print(f"完成！标题: {title}", file=sys.stderr)
 
 
 # ─── Main ───────────────────────────────────────────────────────────
