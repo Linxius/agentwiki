@@ -726,23 +726,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
     brief_date_match = re.search(r'# .*?(\d{4}-\d{2}-\d{2})', brief_content)
     brief_date = brief_date_match.group(1) if brief_date_match else date.today().isoformat()
 
-    # Archive brief.md preserving checkbox state (no clear).
-    # Dedup: use MD5 of brief_content to avoid appending the same content twice.
-    import hashlib
-    content_hash = hashlib.md5(brief_content.encode()).hexdigest()[:12]
-    brief_archive = BRIEF_FILE.parent / "brief"
-    brief_archive.mkdir(parents=True, exist_ok=True)
-    archive_path = brief_archive / f"{brief_date}.md"
-    if brief_content.strip() and brief_content.strip() != "# 资讯简报":
-        if archive_path.exists():
-            existing_text = archive_path.read_text(encoding="utf-8")
-            if content_hash not in existing_text:
-                archived = existing_text + "\n\n---\n\n" + brief_content + f"\n\n**归档于: {brief_date}  哈希: {content_hash}**\n"
-                archive_path.write_text(archived, encoding="utf-8")
-        else:
-            archive_path.write_text(brief_content, encoding="utf-8")
-    # Do NOT clear brief.md — preserve checkbox state for future operations
-
     # Find checked entries
     if date_str:
         entries = find_checked_entries(brief_content, date_str)
@@ -1112,8 +1095,6 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
             if not remaining:
                 shutil.rmtree(images_dir, ignore_errors=True)
 
-    # brief.md was archived and cleared at start — don't restore old entries
-
     # Clean up .tmp refetch cache
     for date_key in list(by_date) + [today]:
         tmp_dir = DAILY_DIR / "deepdive" / date_key / ".tmp"
@@ -1126,6 +1107,23 @@ def run_deep_read(date_str: str = None, file_name: str = None, json_output: bool
         for _, _, _, title in date_results:
             print(f"  + {title}")
     print()
+
+    # ── After phase2: update brief.md checkboxes + auto-archive ──
+    if "--phase2" in sys.argv:
+        import sys as _sys
+        _sys.path.insert(0, str(REPO_ROOT / "tools"))
+        from brief import mark_entry_done, run_archive
+
+        brief_content = read_file(BRIEF_FILE)
+        for date_key, date_results in by_date.items():
+            for _, _, _, title in date_results:
+                brief_content = mark_entry_done(brief_content, title, '深度阅读')
+        write_file(BRIEF_FILE, brief_content)
+
+        # Archive if any date group is fully resolved
+        archived = run_archive()
+        if archived:
+            print(f"  ✅ 已归档: {', '.join(archived)}")
 
 
 def run_direct_read(paper_input: str):

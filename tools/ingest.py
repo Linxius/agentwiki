@@ -1217,6 +1217,28 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             except Exception:
                 raise
 
+    # ── Update brief.md: mark entries as ingested + auto-archive ──
+    _brief_file = REPO_ROOT / "raw" / "digest" / "brief.md"
+    if _brief_file.exists():
+        import sys as _sys
+        _sys.path.insert(0, str(REPO_ROOT / "tools"))
+        from brief import mark_entry_done, run_archive
+        _content = _brief_file.read_text(encoding="utf-8")
+        titles_done = set()
+        for group in merged_groups:
+            for e in group:
+                title = e.get('title', '').strip()
+                if title:
+                    _content = mark_entry_done(_content, title, '合入 wiki')
+                    titles_done.add(title)
+        _brief_file.write_text(_content, encoding="utf-8")
+        if titles_done:
+            print(f"\n📝 brief.md: {len(titles_done)} entries marked as 已合入")
+        # Auto-archive completed date groups
+        archived = run_archive()
+        if archived:
+            print(f"  ✅ 已归档: {', '.join(archived)}")
+
 
 # ── arXiv patterns (shared with deep-read.py) ──
 ARXIV_PATTERNS = [

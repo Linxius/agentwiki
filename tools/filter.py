@@ -862,7 +862,7 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
     """Build brief.md from pre-analyzed results JSON (no LLM calls).
 
     Results JSON is a list of dicts produced by subagent analysis.
-    This handles archiving, brief generation, file moving, and inbox cleanup.
+    This handles brief generation (append if brief.md exists), file moving, and inbox cleanup.
     """
     results_path = Path(results_json_path)
     if not results_path.exists():
@@ -927,12 +927,29 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
     new_entries = generate_brief_entries(results, today)
 
     if not dry_run:
-        # Archive old brief
-        archive_current_brief()
-
-        # Write new brief
-        write_file(BRIEF_FILE, new_entries)
-        print(f"📝 简报已写入: {BRIEF_FILE.relative_to(REPO_ROOT)}")
+        # Append to existing brief if it has content (don't overwrite)
+        if BRIEF_FILE.exists() and BRIEF_FILE.stat().st_size > 50:
+            existing = read_file(BRIEF_FILE)
+            existing_urls = set(re.findall(r'^\- 来源: (.+)$', existing, re.MULTILINE))
+            items = re.split(r'(?=^#### )', new_entries, flags=re.MULTILINE)
+            to_append = []
+            for item in items:
+                m = re.search(r'^\- 来源: (.+)$', item, re.MULTILINE)
+                if m and m.group(1) not in existing_urls:
+                    to_append.append(item)
+            if to_append:
+                updated = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
+                merged = updated.rstrip() + "\n\n" + "\n".join(to_append) + "\n"
+                write_file(BRIEF_FILE, merged)
+                print(f"📝 追加 {len(to_append)} 条新条目到 brief.md")
+            else:
+                print("  无新条目（全部已存在）")
+                updated = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
+                if updated != existing:
+                    write_file(BRIEF_FILE, updated)
+        else:
+            write_file(BRIEF_FILE, new_entries)
+            print(f"📝 简报已写入: {BRIEF_FILE.relative_to(REPO_ROOT)}")
 
         # Move source files
         for item in results:
