@@ -3,12 +3,14 @@
 Import bookmarks from Edge browser to inbox.md.
 
 Usage:
-    python tools/import-edge-bookmarks.py                    # import Wiki/Inbox/
-    python tools/import-edge-bookmarks.py "Wiki/Inbox"       # custom folder path
-    python tools/import-edge-bookmarks.py --list              # list all folders
-    python tools/import-edge-bookmarks.py --archive           # move Wiki/Inbox/ → Wiki/Inbox Archive/
-    python tools/import-edge-bookmarks.py --pipeline          # full flow: import → dedup → archive
-    python tools/import-edge-bookmarks.py --profile "Profile 1"  # non-default profile
+    python tools/import-edge-bookmarks.py                     # 导入 → 去重 → 归档（默认）
+    python tools/import-edge-bookmarks.py "Wiki/Inbox"        # 自定义文件夹
+    python tools/import-edge-bookmarks.py --list               # 列出所有文件夹
+    python tools/import-edge-bookmarks.py --import-only        # 仅导入，不去重不归档
+    python tools/import-edge-bookmarks.py --no-dedup           # 导入+归档，跳过去重
+    python tools/import-edge-bookmarks.py --no-archive         # 导入+去重，跳过归档
+    python tools/import-edge-bookmarks.py --archive            # 仅归档
+    python tools/import-edge-bookmarks.py --profile "Profile 1"  # 非默认 profile
 
 Folder path uses '/' separator, e.g. "Wiki/Inbox" or "收藏夹栏/参考".
 Roots: bookmark_bar (default), other, synced.
@@ -259,16 +261,20 @@ def main():
                         choices=["bookmark_bar", "other", "synced"],
                         help="Bookmark root (default: bookmark_bar)")
     parser.add_argument("--no-append", action="store_true", help="Overwrite inbox.md instead of appending")
+    parser.add_argument("--import-only", action="store_true",
+                        help="Only import, skip dedup and archive")
+    parser.add_argument("--no-dedup", action="store_true",
+                        help="Import + archive, skip dedup")
+    parser.add_argument("--no-archive", action="store_true",
+                        help="Import + dedup, skip archive")
     parser.add_argument("--archive", action="store_true",
-                        help="Archive processed bookmarks: move Wiki/Inbox/ → Wiki/Inbox Archive/")
+                        help="Archive only: move bookmarks to Archive folder")
     parser.add_argument("--archive-url", action="append", default=[],
                         help="Archive specific URL(s) from the source folder (can repeat)")
     parser.add_argument("--archive-from", default=None,
                         help="Archive URL list from this file (one URL per line)")
     parser.add_argument("--archive-to", default=None,
                         help="Archive destination folder (default: <source> Archive/)")
-    parser.add_argument("--pipeline", action="store_true",
-                        help="Full flow: import → dedup inbox.md → archive all bookmarks")
     args = parser.parse_args()
 
     try:
@@ -286,47 +292,17 @@ def main():
         print(f"❌ Root '{args.root}' not found in bookmarks")
         sys.exit(1)
 
-    # Pipeline mode: import → dedup → archive
-    if args.pipeline:
-        folder = find_folder(root_node, [p for p in args.folder.replace("\\", "/").split("/") if p])
-        if not folder:
-            print(f"❌ Folder '{args.folder}' not found")
-            sys.exit(1)
-
-        # Step 1: import
-        print(f"━━━ Step 1/3: 导入书签 ━━━")
-        urls = collect_urls(folder)
-        if not urls:
-            print(f"文件夹 '{args.folder}' 为空。")
-            return
-        print(f"从 '{args.folder}' 找到 {len(urls)} 个链接")
-        write_inbox(urls, append=not args.no_append)
-
-        # Step 2: dedup
-        print(f"\n━━━ Step 2/3: 去重 ━━━")
-        dedup_inbox_md()
-
-        # Step 3: archive
-        print(f"\n━━━ Step 3/3: 归档书签 ━━━")
-        archive_dest = args.archive_to or f"{args.folder} Archive"
-        count = archive_bookmarks(data, args.folder, archive_dest, urls_to_archive=None)
-        if count > 0:
-            tmp_file = bookmarks_file.with_suffix(".tmp")
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=3)
-            shutil.move(str(tmp_file), str(bookmarks_file))
-            print(f"📝 Edge 书签文件已更新")
-            print("⚠️  请重启 Edge 浏览器使更改生效。")
-
-        print(f"\n✅ Pipeline 完成: {len(urls)} 导入 → {count} 归档")
+    # List mode
+    if args.list:
+        print(f"=== {args.root} ===")
+        list_folders(root_node)
         return
 
-    # Archive mode
+    # Archive-only mode
     if args.archive or args.archive_url or args.archive_from:
         archive_dest = args.archive_to or f"{args.folder} Archive"
         urls_to_archive = list(args.archive_url)
 
-        # Read URLs from file if specified
         if args.archive_from:
             archive_file = Path(args.archive_from)
             if archive_file.exists():
@@ -337,17 +313,13 @@ def main():
                 print(f"⚠️  归档文件不存在: {args.archive_from}")
 
         if urls_to_archive:
-            # Archive specific URLs
             count = archive_bookmarks(data, args.folder, archive_dest, urls_to_archive)
         elif args.archive and not args.archive_from:
-            # --archive with no specific URLs: move ALL from source to archive
             count = archive_bookmarks(data, args.folder, archive_dest, urls_to_archive=None)
         else:
             count = 0
 
         if count > 0:
-            # Write back bookmarks
-            # Edge expects the file to be written atomically
             tmp_file = bookmarks_file.with_suffix(".tmp")
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=3)
@@ -356,13 +328,8 @@ def main():
             print("⚠️  请重启 Edge 浏览器使更改生效。")
         return
 
-    # List mode
-    if args.list:
-        print(f"=== {args.root} ===")
-        list_folders(root_node)
-        return
-
-    # Import mode
+    # ── Default: import → dedup → archive ──
+    # Step 0: find folder
     parts = [p for p in args.folder.replace("\\", "/").split("/") if p]
     folder = find_folder(root_node, parts)
     if not folder:
@@ -375,8 +342,35 @@ def main():
         print(f"文件夹 '{args.folder}' 为空。")
         return
 
+    # Step 1: import
+    print(f"━━━ Step 1/3: 导入书签 ━━━")
     print(f"从 '{args.folder}' 找到 {len(urls)} 个链接")
     write_inbox(urls, append=not args.no_append)
+
+    # Step 2: dedup (skip if --no-dedup or --import-only)
+    if not args.no_dedup and not args.import_only:
+        print(f"\n━━━ Step 2/3: 去重 ━━━")
+        dedup_inbox_md()
+    else:
+        print(f"\n━━━ Step 2/3: 去重 (跳过) ━━━")
+
+    # Step 3: archive (skip if --no-archive or --import-only)
+    archived = 0
+    if not args.no_archive and not args.import_only:
+        print(f"\n━━━ Step 3/3: 归档书签 ━━━")
+        archive_dest = args.archive_to or f"{args.folder} Archive"
+        archived = archive_bookmarks(data, args.folder, archive_dest, urls_to_archive=None)
+        if archived > 0:
+            tmp_file = bookmarks_file.with_suffix(".tmp")
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=3)
+            shutil.move(str(tmp_file), str(bookmarks_file))
+            print(f"📝 Edge 书签文件已更新")
+            print("⚠️  请重启 Edge 浏览器使更改生效。")
+    else:
+        print(f"\n━━━ Step 3/3: 归档书签 (跳过) ━━━")
+
+    print(f"\n✅ 完成: {len(urls)} 导入 → {archived} 归档")
 
 
 if __name__ == "__main__":

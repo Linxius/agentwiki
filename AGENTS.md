@@ -22,7 +22,7 @@ This wiki is maintained entirely by your coding agent. No API key needed — jus
 
 | 触发词 | 动作 | 详情 |
 |--------|------|------|
-| `import bookmarks` / `导入书签` | Edge 书签 → inbox.md → 下载 → 简报 → 归档 | [tools-reference.md](docs/tools-reference.md) |
+| `import bookmarks` / `导入书签` | 书签导入 → 去重 → 归档，然后 inbox.py 下载 + filter.py 简报 | [tools-reference.md](docs/tools-reference.md) |
 | `filter` / `开始筛选` | 筛选 inbox/ → 生成 brief.md | [filter.md](docs/workflows/filter.md) |
 | `deep read` / `生成深度阅读` | 对 brief 勾选条目生成报告 | [deep-read.md](docs/workflows/deep-read.md) |
 | `ingest from digest` / `合入 wiki` | digest 勾选条目合入 wiki | [ingest.md](docs/workflows/ingest.md) |
