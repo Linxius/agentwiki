@@ -1,5 +1,8 @@
 ## [2026-07-28] ingest | World Tracing: Generative Pixel-Aligned Geometry Beyond the Visible
 
+## [2026-07-29] ingest | Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction
+Added source. Key claims: 将可学习特征锚定在基元外包的虚拟支架上，于光线交点插值并经 sin/cos 周期激活，使 alpha 混合变为谐波分量加权和，最后用轻量 MLP 延迟解码像素颜色；在 3DGS 上以更低基元数取得新视角合成 SOTA，并可无缝接入 3DGUT / 2DGS / Triangle Splatting。
+
 ## [2026-07-28] ingest | Rectified Flow
 
 Added source. Key claims: Rectified Flow 通过学习直线轨迹的 ODE 实现两个分布间的传输映射，Reflow 过程进一步直化轨迹，可实现单步 Euler 生成。

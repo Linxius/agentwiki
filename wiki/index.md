@@ -35,6 +35,7 @@ This file is maintained by the LLM. Updated on every ingest.
 - [GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction](sources/gs-2m.md) — 材料感知联合优化，PBR + 多视角粗糙度监督实现反射表面高质量网格重建
 ## Papers
 - [Surflo](sources/surflo.md) — 全局 latent + 流匹配实现前馈式任意密度 3D 表面重建，从无位姿多视图直接生成定向点云和网格
+- [Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction](sources/neural-harmonic-textures.md) — 基元绑定谐波特征 + 延迟着色 MLP，提升 3DGS 单基元表达力，新视角合成 SOTA
 ## Entities
 
 ## Concepts
