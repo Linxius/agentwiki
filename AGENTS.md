@@ -38,7 +38,7 @@ Agent 主动提醒（完整列表见 `triggers.md` #Agent 主动提醒）：inbo
 
 ## arXiv 下载失败自动处理
 
-`inbox.py` 的 arxiv2md / pdf2md / alphaXiv HTTP overview 均失败时，会在源文件中写入以下标记：
+`inbox.py` 的 arxiv2md / alphaXiv HTTP overview 均失败时，会在源文件中写入以下标记：
 
 ```yaml
 agent_action: fetch_alphaxiv

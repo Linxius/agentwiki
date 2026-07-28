@@ -604,7 +604,7 @@ def fetch_arxiv(arxiv_id: str, out_path: Path | None = None) -> str:
 
 
 def _fetch_arxiv_api(arxiv_id: str) -> str:
-    """Fallback: use arxiv2md Python API (no figure handling)."""
+    """Fallback: use arxiv2md Python API, then alphaXiv overview HTTP."""
     try:
         from arxiv2md import ingest_paper_sync
         result = ingest_paper_sync(arxiv_id, include_frontmatter=True)
@@ -616,36 +616,17 @@ def _fetch_arxiv_api(arxiv_id: str) -> str:
         if cache_dir.exists():
             shutil.rmtree(cache_dir, ignore_errors=True)
 
-    # Fallback: use pdf2md.py subprocess
-    pdf2md_script = REPO_ROOT / "tools" / "pdf2md.py"
-    if pdf2md_script.exists():
-        fd, tmp_path = tempfile.mkstemp(suffix=".md", prefix=f"arxiv_{arxiv_id}_")
-        os.close(fd)
-        tmp = Path(tmp_path)
-        try:
-            result = subprocess.run(
-                [sys.executable, str(pdf2md_script), arxiv_id, "-o", str(tmp)],
-                capture_output=True, text=True, timeout=120,
-            )
-            if result.returncode == 0 and tmp.exists():
-                return tmp.read_text(encoding="utf-8")
-        except Exception:
-            pass
-        finally:
-            if tmp.exists():
-                tmp.unlink()
-
-    # Final fallback: alphaXiv overview (AI-generated structured report in markdown)
+    # Fallback: alphaXiv overview (AI 生成的结构化报告，HTTP 可访问)
     alphaxiv_url = f"https://www.alphaxiv.org/overview/{arxiv_id}.md"
     try:
         resp = requests.get(alphaxiv_url, timeout=15,
                             headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and len(resp.text) > 5000:
             content = resp.text
-            # Prepend frontmatter with original arxiv URL
-            title_match = content.split("\n")[0] if content else ""
+            title_line = content.split("\n")[0].strip() if content else ""
+            title = title_line.lstrip("# ").strip() if title_line else f"arXiv {arxiv_id}"
             return f"""---
-title: "{title_match.lstrip('# ').strip() if title_match else f'arXiv {arxiv_id}'}"
+title: "{title}"
 url: "https://arxiv.org/abs/{arxiv_id}"
 source: "alphaxiv overview"
 ---
@@ -655,7 +636,7 @@ source: "alphaxiv overview"
     except Exception:
         pass
 
-    return f"# arXiv: {arxiv_id}\n\n[arxiv2md not installed — try: pip install git+https://github.com/Linxius/arxiv2md.git]\n\nOriginal: https://arxiv.org/abs/{arxiv_id}"
+    return ""
 
 
 # ─── Slug generation ────────────────────────────────────────────────
