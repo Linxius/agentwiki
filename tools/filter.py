@@ -1145,17 +1145,21 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                     failed_files.add(rel)
             clean_task_dirs()
         else:
-            # Normal mode: direct LLM calls
+            # Normal mode: try direct LLM calls.
+            # If call_llm returns empty (phase1 architecture where agent=LLM),
+            # auto-switch to phase1: write task files and tell user to run --phase2.
             with ThreadPoolExecutor(max_workers=2) as exec:
                 future_map = {
                     exec.submit(analyze_file, fp, interests_desc, disinterests_desc): (fp, rel)
                     for fp, rel in pending
                 }
 
+                any_succeeded = False
                 for future in as_completed(future_map):
                     fp, rel = future_map[future]
                     try:
                         file_results = future.result()
+                        any_succeeded = True
                         serialized = []
                         for r in file_results:
                             item = dict(r)
@@ -1166,6 +1170,23 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                     except Exception as e:
                         print(f"  ⚠️  {fp.name} failed: {e}")
                         failed_files.add(rel)
+
+            # All files failed → check if call_llm is in phase1 mode
+            if pending and not any_succeeded and len(failed_files) == len(pending):
+                tasks = []
+                for fp, rel in pending:
+                    prompt = build_analyze_prompt(fp, interests_desc, disinterests_desc)
+                    tasks.append({
+                        "id": rel.replace("/", "_").replace("\\", "_"),
+                        "prompt": prompt,
+                        "max_tokens": 4096,
+                        "metadata": {"file": rel, "title": fp.stem},
+                    })
+                prepare_tasks(tasks)
+                print(f"\n📝 检测到 phase1 模式（call_llm 返回空），已写入 {len(tasks)} 个分析任务到 {TASK_DIR}")
+                print("   请让 agent 处理这些任务，然后运行:")
+                print(f"     python tools/filter.py --phase2")
+                return  # Skip cleanup — inbox stays untouched
     else:
         pass
 
@@ -1263,7 +1284,10 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                 except Exception as e:
                     print(f"    ⚠️  move failed: {e}")
 
-        clear_inbox(skip_rel_paths=failed_files)
+        if not failed_files:
+            clear_inbox(skip_rel_paths=failed_files)
+        else:
+            print(f"  ⏭️  跳过 inbox 清理（{len(failed_files)} 个文件分析失败，保留 inbox.md 不变）")
 
         # Clear checkpoint cache
         if FILTER_CACHE.exists():
