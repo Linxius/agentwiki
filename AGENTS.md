@@ -100,6 +100,9 @@ graph/        graph.json graph.html
 templates/    generic.md paper.md article.md book.md dataset.md doc.md project.md talk.md
 tools/        inbox.py filter.py deep-read.py ingest.py status.py health.py lint.py \
               import-edge-bookmarks.py bookmark-tracker.py ...
+
+> **临时文件约定**：所有中间产物（分析任务、子代理结果、缓存、辅助脚本等）一律放在 `raw/.tmp/`（已 gitignore）。
+> 禁止在仓库根创建 `.tmp/`、`temp/`、`tasks/`、`results/` 等临时目录。
 ```
 
 ## Workflows Overview

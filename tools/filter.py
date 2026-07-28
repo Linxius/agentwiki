@@ -749,68 +749,6 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
     return "\n".join(lines)
 
 
-def archive_current_brief():
-    """Archive current brief.md to digest/brief/YYYY-MM-DD.md if it exists.
-    Uses the date from the brief.md header (e.g. '# 资讯简报  2026-07-28')
-    rather than date.today(), so archive filenames match the brief's actual date.
-    """
-    if not BRIEF_FILE.exists():
-        return
-    
-    # Extract date from brief.md header
-    content = read_file(BRIEF_FILE)
-    date_match = re.search(r'# .*?(\d{4}-\d{2}-\d{2})', content)
-    today = date_match.group(1) if date_match else date.today().isoformat()
-    
-    archive_path = BRIEF_DIR / f"{today}.md"
-    if archive_path.exists():
-        existing = read_file(BRIEF_FILE)
-        archive_content = read_file(archive_path)
-        archive_content += "\n\n---\n\n" + existing + f"\n\n**归档于: {today}**"
-        write_file(archive_path, archive_content)
-    else:
-        shutil.copy2(str(BRIEF_FILE), str(archive_path))
-
-
-def generate_new_brief():
-    """After archiving, create a minimal brief.md placeholder for today.
-    Uses the same date from the archived brief if available.
-    """
-    # Try to get date from archived brief
-    today = date.today().isoformat()
-    if BRIEF_DIR.exists():
-        archives = sorted(BRIEF_DIR.glob("*.md"))
-        if archives:
-            m = re.search(r'(\d{4}-\d{2}-\d{2})', archives[-1].stem)
-            if m:
-                today = m.group(1)
-    content = f"""# 资讯简报
-
----
-
-## 今日暂无待处理资讯
-
----
-
-## 操作指引
-
-- 勾选「深度阅读」后，告诉 agent 生成详细解读
-- 勾选「合入 wiki」后，告诉 agent 执行合入
-- 勾选「不感兴趣」后，运行 deep-read 自动生成兴趣列表更新建议
-- 勾选「不处理」后，归档时直接删除该条目（不留归档）
-
-## 状态说明
-
-- **待处理**：已筛选，待确认
-- **已深度阅读**：已生成深度阅读报告
-- **已合入**：已合并到 wiki
-- **已跳过**：用户选择不处理
-- **已忽略**：用户选择忽略，归档时直接删除
-
-"""
-    write_file(BRIEF_FILE, content)
-
-
 def move_source(file_path: Path, date_str: str):
     """Move .md file + its images/ dir to digest/sources/YYYY-MM-DD/."""
     dest_dir = DIGEST_DIR / "sources" / date_str
@@ -891,6 +829,28 @@ def _clean_inbox_md(processed_urls: set[str]):
     inbox_md.write_text("\n".join(kept) + "\n", encoding="utf-8")
     if removed:
         print(f"  📝 inbox.md: 清除 {removed} 条已处理条目，未处理条目已保留")
+
+
+def _merge_brief(existing: str, new_entries: str, today: str) -> tuple[str | None, list[str]]:
+    """Merge new entries into existing brief, preserving user edits ([x] marks).
+    
+    Returns (merged_content | None, list_of_appended_titles).
+    """
+    existing_urls = set(re.findall(r'^\- 来源: (.+)$', existing, re.MULTILINE))
+    items = re.split(r'(?=^#### )', new_entries, flags=re.MULTILINE)
+    to_append = []
+    appended_titles = []
+    for item in items:
+        m = re.search(r'^\- 来源: (.+)$', item, re.MULTILINE)
+        if m and m.group(1) not in existing_urls:
+            to_append.append(item)
+            title_m = re.search(r'^#### (.+)', item, re.MULTILINE)
+            appended_titles.append(title_m.group(1).strip() if title_m else "(unknown)")
+    if not to_append:
+        return None, []
+    updated = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
+    merged = updated.rstrip() + "\n\n" + "\n".join(to_append) + "\n"
+    return merged, appended_titles
 
 
 def append_log(entry: str):
@@ -1011,18 +971,14 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
         # Append to existing brief if it has content (don't overwrite)
         if BRIEF_FILE.exists() and BRIEF_FILE.stat().st_size > 50:
             existing = read_file(BRIEF_FILE)
-            existing_urls = set(re.findall(r'^\- 来源: (.+)$', existing, re.MULTILINE))
-            items = re.split(r'(?=^#### )', new_entries, flags=re.MULTILINE)
-            to_append = []
-            for item in items:
-                m = re.search(r'^\- 来源: (.+)$', item, re.MULTILINE)
-                if m and m.group(1) not in existing_urls:
-                    to_append.append(item)
-            if to_append:
-                updated = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
-                merged = updated.rstrip() + "\n\n" + "\n".join(to_append) + "\n"
+            merged, appended = _merge_brief(existing, new_entries, today)
+            if merged:
+                # Guard: warn if existing [x] marks are not carried over
+                checked = re.findall(r'-\s+\[x\]\s+.+', existing)
+                if checked and not all(c in merged for c in checked):
+                    print(f"  ⚠️  brief.md 中 {len(checked)} 个已勾选项将丢失！")
                 write_file(BRIEF_FILE, merged)
-                print(f"📝 追加 {len(to_append)} 条新条目到 brief.md")
+                print(f"📝 追加 {len(appended)} 条新条目到 brief.md")
             else:
                 print("  无新条目（全部已存在）")
                 updated = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
@@ -1334,24 +1290,15 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     if not dry_run:
         if BRIEF_FILE.exists() and BRIEF_FILE.stat().st_size > 50:
             existing = read_file(BRIEF_FILE)
-            # Extract existing source_urls for dedup
-            existing_urls = set(re.findall(r'^\- 来源: (.+)$', existing, re.MULTILINE))
-            # Split new entries into individual items (by #### header)
-            items = re.split(r'(?=^#### )', new_entries, flags=re.MULTILINE)
-            to_append = []
-            for item in items:
-                m = re.search(r'^\- 来源: (.+)$', item, re.MULTILINE)
-                if m and m.group(1) not in existing_urls:
-                    to_append.append(item)
-            if to_append:
-                # Update date in header
-                updated = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
-                merged = updated.rstrip() + "\n\n" + "\n".join(to_append) + "\n"
+            merged, appended = _merge_brief(existing, new_entries, today)
+            if merged:
+                checked = re.findall(r'-\s+\[x\]\s+.+', existing)
+                if checked and not all(c in merged for c in checked):
+                    print(f"  ⚠️  brief.md 中 {len(checked)} 个已勾选项将丢失！")
                 write_file(BRIEF_FILE, merged)
-                print(f"  追加 {len(to_append)} 条新条目到 brief.md")
+                print(f"  追加 {len(appended)} 条新条目到 brief.md")
             else:
                 print("  无新条目（全部已存在）")
-                # Still update date if needed
                 existing = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
                 if existing != read_file(BRIEF_FILE):
                     write_file(BRIEF_FILE, existing)
