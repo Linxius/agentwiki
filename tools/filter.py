@@ -993,6 +993,9 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
     log_entry = f"## [{today}] filter | {len(results)} files processed"
     append_log(log_entry)
     print(f"\n✅ 筛选完成！简报: {BRIEF_FILE.relative_to(REPO_ROOT)}")
+
+
+def run_filter(dry_run: bool = False, json_output: bool = False):
     """Main filter flow with per-file checkpoint cache."""
     DIGEST_DIR.mkdir(parents=True, exist_ok=True)
     BRIEF_DIR.mkdir(parents=True, exist_ok=True)
