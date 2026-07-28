@@ -1,3 +1,8 @@
+## [2026-07-29] filter | 17 files processed（含 2 篇 alphaXiv 补全：GlossyGS、RaDe-GS）
+
+
+
+
 ## [2026-07-28] ingest | World Tracing: Generative Pixel-Aligned Geometry Beyond the Visible
 
 ## [2026-07-29] ingest | Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction
