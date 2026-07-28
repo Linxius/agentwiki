@@ -591,6 +591,11 @@ def fetch_arxiv(arxiv_id: str, out_path: Path | None = None) -> str:
                 if md_files:
                     generated = md_files[0]
                     content = generated.read_text(encoding="utf-8")
+                    # Reject if CLI produced garbage (empty/too short)
+                    if len(content) < 5000:
+                        print(f"  ⚠️  arxiv2md CLI 输出过短 ({len(content)} bytes)，跳过")
+                        generated.unlink(missing_ok=True)
+                        return _fetch_arxiv_api(arxiv_id)
                     # Rename to our expected filename
                     if generated != out_path:
                         generated.rename(out_path)
@@ -616,7 +621,8 @@ def _fetch_arxiv_api(arxiv_id: str) -> str:
         if cache_dir.exists():
             shutil.rmtree(cache_dir, ignore_errors=True)
 
-    # alphaXiv overview HTTP 兜底（AI 生成的结构化报告）
+    # alphaXiv overview HTTP 兜底（AI 生成的结构化报告，作为 agent 的备用方案）
+    # 注意：MCP fullText 优先于 HTTP overview，见 AGENTS.md #arXiv 下载失败自动处理
     alphaxiv_url = f"https://www.alphaxiv.org/overview/{arxiv_id}.md"
     try:
         resp = requests.get(alphaxiv_url, timeout=15,

@@ -48,13 +48,27 @@ agent_note: "内容过短 (113 bytes, 阈值 5000)"
 ### Agent 操作步骤
 
 1. `grep -r "agent_action: fetch_alphaxiv" raw/inbox/` 扫描待处理文件
-2. 对每个文件，提取 arxiv ID（从 URL 或文件名），调用 `alphaxiv_get_paper_content`：
+2. 对每个文件，提取 arxiv ID，调用 `alphaxiv_get_paper_content`：
    ```
    alphaxiv_get_paper_content(url="https://arxiv.org/abs/{id}", fullText=true)
    ```
-3. 将返回的完整论文内容（markdown）覆盖写回原文件
-4. 删除该文件的 YAML 中的 `agent_action`/`agent_note` 行（或保留但改为 `agent_action: done`）
-5. 之后 `filter` 正常处理该文件
+3. 将返回的完整论文内容用 YAML frontmatter 包裹后写回原文件：
+   ```
+   ---
+   title: "论文标题（从返回内容第一行 # 提取）"
+   url: "https://arxiv.org/abs/{id}"
+   source: "alphaxiv fullText"
+   ---
+   
+   {完整论文内容}
+   ```
+4. 删除该文件的 YAML 中 `agent_action`/`agent_note` 行
+5. 如果 MCP fullText 也失败，fallback 到 alphaXiv HTTP overview：
+   ```
+   https://www.alphaxiv.org/overview/{id}.md
+   ```
+   同样用 YAML frontmatter 包裹后写回（`source: "alphaxiv overview"`）
+6. 之后 `filter` 正常处理该文件
 
 ## 流程优化
 
