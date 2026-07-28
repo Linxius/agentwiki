@@ -8,7 +8,7 @@ Usage:
     python tools/inbox.py --list-local       # show local files in inbox/ without converting
     python tools/inbox.py --dedup            # deduplicate by arxiv ID and rewrite inbox.md
     python tools/inbox.py --no-scan          # only process links, skip local files
-    python tools/inbox.py --process-only     # only process, skip inbox.md cleanup
+    python tools/inbox.py --process-only     # (已废弃) 目前无效果，仅为兼容
 
 Supported links in inbox.md:
     - https://arxiv.org/abs/2401.12345       arXiv paper
@@ -898,8 +898,12 @@ def process_link(item: dict, out_dir: Path) -> str:
     return out_file
 
 
-def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str]:
-    """Process inbox.md links + convert local files. Return list of saved file paths."""
+def process_inbox(no_scan: bool = False) -> list[str]:
+    """Process inbox.md links + convert local files. Return list of saved file paths.
+
+    Note: inbox.md cleanup is handled by filter.py's clear_inbox() after brief generation.
+    This function only fetches/converts files; it never removes lines from inbox.md.
+    """
     saved = []
 
     # ── Step 1: inbox.md links ──
@@ -907,47 +911,13 @@ def process_inbox(process_only: bool = False, no_scan: bool = False) -> list[str
     if items:
 
         out_dir = INBOX_DIR
-        failed_raw: dict[str, str] = {}   # raw_line.strip() → error message
-        success_raw: set[str] = set()     # raw_line.strip() of saved items
         for item in items:
-            raw = item["raw"].strip()
             try:
                 saved_file = process_link(item, out_dir)
                 if saved_file is not None:
                     saved.append(str(saved_file.relative_to(REPO_ROOT)))
-                    success_raw.add(raw)
-                # git/local returns None — keep line in inbox.md
             except Exception as e:
                 print(f"    FAILED: {e}")
-                failed_raw[raw] = str(e)
-
-        if not process_only:
-            if failed_raw:
-                # Line-by-line: remove successes, mark failures with ⚠️
-                content = INBOX_MD.read_text(encoding="utf-8")
-                new_lines = []
-                for line in content.splitlines():
-                    stripped = line.strip()
-                    if stripped in success_raw:
-                        continue  # remove from inbox
-                    if stripped in failed_raw:
-                        indent = re.match(r'^(\s*)', line).group(1)
-                        body = stripped.lstrip("-* ").strip()
-                        new_lines.append(f"{indent}- ⚠️ {body}  # {failed_raw[stripped]}")
-                    else:
-                        new_lines.append(line)
-                content = re.sub(r'\n{3,}', '\n\n', "\n".join(new_lines)).strip()
-                INBOX_MD.write_text(content + "\n", encoding="utf-8")
-                print(f"  ⏭️  {len(failed_raw)} 个链接下载异常，已在 inbox.md 中标记 ⚠️")
-            else:
-                # All clean: regex sweep
-                content = INBOX_MD.read_text(encoding="utf-8")
-                content = re.sub(r'^\s*[-*]\s*https?://\S+\s*\n?', '', content, flags=re.MULTILINE)
-                content = re.sub(r'^\s*[-*]\s*git@[\w.-]+:\S+\s*\n?', '', content, flags=re.MULTILINE)
-                content = re.sub(r'^\s*[-*]\s*\d{4}\.\d{4,5}[^\n]*\n?', '', content, flags=re.MULTILINE)
-                content = re.sub(r'^\s*[-*]\s*([\w]:[/\\]|/|\.\.?/)\S+\s*\n?', '', content, flags=re.MULTILINE)
-                content = re.sub(r'\n{3,}', '\n\n', content).strip()
-                INBOX_MD.write_text(content + "\n", encoding="utf-8")
 
     # ── Step 2: local files ──
     if not no_scan:
@@ -1007,7 +977,8 @@ def main():
     parser.add_argument("--list", action="store_true", help="List links without processing")
     parser.add_argument("--list-local", action="store_true", help="List local files in inbox/ without converting")
     parser.add_argument("--dedup", action="store_true", help="Deduplicate inbox.md by arxiv ID and rewrite file")
-    parser.add_argument("--process-only", action="store_true", help="Only process links, skip inbox.md cleanup")
+    parser.add_argument("--process-only", action="store_true",
+                        help="(已废弃, 无效果) 不再在 inbox.py 中清理 inbox.md，统一由 filter.py 处理")
     parser.add_argument("--no-scan", action="store_true", help="Skip local file scanning")
     args = parser.parse_args()
 
@@ -1042,7 +1013,7 @@ def main():
         dedup_inbox_md()
         return
 
-    process_inbox(process_only=args.process_only, no_scan=args.no_scan)
+    process_inbox(no_scan=args.no_scan)
 
 
 if __name__ == "__main__":
