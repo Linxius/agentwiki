@@ -196,6 +196,10 @@ def archive_bookmarks(data: dict, source_path: str, archive_path: str, urls_to_a
         return 0
     archive_folder = find_or_create_folder(archive_parent, archive_name)
 
+    # Create a date-stamped subfolder inside the archive folder
+    today = datetime.now().strftime("%Y-%m-%d")
+    date_folder = find_or_create_folder(archive_folder, today)
+
     # Determine which bookmarks to move
     children = source_folder.get("children", [])
     to_move = []
@@ -224,14 +228,15 @@ def archive_bookmarks(data: dict, source_path: str, archive_path: str, urls_to_a
         print("没有需要归档的书签。")
         return 0
 
-    # Move bookmarks
+    # Move bookmarks into the date-stamped subfolder
     for bookmark in to_move:
-        archive_folder.setdefault("children", []).append(bookmark)
+        date_folder.setdefault("children", []).append(bookmark)
 
     # Keep only non-url children (subfolders) in source
     source_folder["children"] = remaining
 
-    print(f"✅ 已归档 {len(to_move)} 个书签: {source_path} → {archive_path}")
+    archive_path_full = f"{archive_path}/{today}"
+    print(f"✅ 已归档 {len(to_move)} 个书签: {source_path} → {archive_path_full}")
     return len(to_move)
 
 
