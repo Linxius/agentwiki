@@ -683,6 +683,7 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
                 lines.append(f"- [ ] 深度阅读")
                 lines.append(f"- [ ] 合入 wiki")
                 lines.append(f"- [ ] 不感兴趣")
+                lines.append(f"- [ ] 不处理")
                 lines.append("")
 
                 # Figure / framework diagram
@@ -750,6 +751,7 @@ def generate_new_brief():
 - 勾选「深度阅读」后，告诉 agent 生成详细解读
 - 勾选「合入 wiki」后，告诉 agent 执行合入
 - 勾选「不感兴趣」后，运行 deep-read 自动生成兴趣列表更新建议
+- 勾选「不处理」后，归档时直接删除该条目（不留归档）
 
 ## 状态说明
 
@@ -757,6 +759,7 @@ def generate_new_brief():
 - **已深度阅读**：已生成深度阅读报告
 - **已合入**：已合并到 wiki
 - **已跳过**：用户选择不处理
+- **已忽略**：用户选择忽略，归档时直接删除
 
 """
     write_file(BRIEF_FILE, content)

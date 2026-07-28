@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Brief lifecycle management — archive completed entries by source date.
+Brief lifecycle management — archive/discard completed entries by source date.
 
-Entry is terminal (can be archived) when:
-  - [x] 已合入  (imported to wiki)
-  - [x] 不感兴趣  (explicitly skipped)
+Entry is terminal (will be removed from brief.md) when:
+  - [x] 已合入   (imported to wiki)       → archived
+  - [x] 不感兴趣  (explicitly skipped)    → archived
+  - [x] 不处理    (explicitly discarded)  → deleted directly (no archive)
 
 Usage:
     python tools/brief.py                     # auto-archive all completed date groups
@@ -63,6 +64,7 @@ def parse_entries(content: str) -> list[dict]:
                 'source_path': src_path,
                 'is_ingested': bool(re.search(r'\[x\]\s*已合入|\[X\]\s*已合入', et)),
                 'is_disinterested': bool(re.search(r'\[x\]\s*不感兴趣|\[X\]\s*不感兴趣', et)),
+                'is_ignored': bool(re.search(r'\[x\]\s*不处理|\[X\]\s*不处理', et)),
             })
             i = next_i
         else:
@@ -79,6 +81,11 @@ def group_by_date(entries: list[dict]) -> dict[str, list[dict]]:
 
 
 def is_terminal(e: dict) -> bool:
+    return e['is_ingested'] or e['is_disinterested'] or e['is_ignored']
+
+
+def is_archivable(e: dict) -> bool:
+    """Entry should be archived (not deleted)."""
     return e['is_ingested'] or e['is_disinterested']
 
 
@@ -125,6 +132,7 @@ def _empty_brief(today: str = '') -> str:
 - 勾选「深度阅读」后，告诉 agent 生成详细解读
 - 勾选「合入 wiki」后，告诉 agent 执行合入
 - 勾选「不感兴趣」后，运行 deep-read 自动生成兴趣列表更新建议
+- 勾选「不处理」后，归档时直接删除该条目（不留归档）
 """
 
 
@@ -144,8 +152,9 @@ def run_archive(force_date: str = None) -> list[str]:
 
     groups = group_by_date(entries)
 
-    # Separate terminal vs keep
+    # Separate terminal vs keep, and archive-vs-delete within terminal
     to_archive: dict[str, list[dict]] = {}
+    to_delete: list[dict] = []
     keep: list[dict] = []
 
     for d, group in groups.items():
@@ -155,21 +164,24 @@ def run_archive(force_date: str = None) -> list[str]:
         all_done = all(is_terminal(e) for e in group)
         forced = force_date == d
         if all_done or forced:
-            to_archive[d] = group
+            archive_entries = [e for e in group if is_archivable(e)]
+            delete_entries = [e for e in group if e['is_ignored']]
+            if archive_entries:
+                to_archive[d] = archive_entries
+            to_delete.extend(delete_entries)
         else:
             keep.extend(group)
 
-    if not to_archive:
+    if not to_archive and not to_delete:
         print("  No completed date groups to archive.")
         return []
 
     lines = content.split('\n')
 
-    # Build archive files
+    # Build archive files (只归档，不写入不处理的条目)
     archived_dates = []
     for d in sorted(to_archive):
         group = to_archive[d]
-        # Collect entry text in order
         parts = []
         for e in group:
             chunk = '\n'.join(lines[e['start']:e['end']])
@@ -186,7 +198,10 @@ def run_archive(force_date: str = None) -> list[str]:
         print(f"  📦 brief/{d}.md  ← {len(group)} entries")
         archived_dates.append(d)
 
-    # Rebuild brief.md with preamble + kept entries
+    if to_delete:
+        print(f"  🗑️  {len(to_delete)} entries deleted (不处理)")
+
+    # Rebuild brief.md: keep untouched entries
     first_entry = min((e['start'] for e in entries), default=0)
     preamble = lines[:first_entry]
 
@@ -239,10 +254,11 @@ def show_status():
         terminal = sum(1 for e in group if is_terminal(e))
         ingested = sum(1 for e in group if e['is_ingested'])
         skipped = sum(1 for e in group if e['is_disinterested'])
+        ignored = sum(1 for e in group if e['is_ignored'])
         pending = total - terminal
 
         status = "✅ 可归档" if pending == 0 else f"⏳ {pending}/{total} 待处理"
-        print(f"  {label}: {status}  ({ingested} 已合入, {skipped} 不感兴趣, {pending} 待处理)")
+        print(f"  {label}: {status}  ({ingested} 已合入, {skipped} 不感兴趣, {ignored} 不处理, {pending} 待处理)")
 
     print()
 
