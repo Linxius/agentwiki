@@ -782,58 +782,6 @@ def scan_and_convert_local_files() -> list[str]:
 
 
 # ─── Main ───────────────────────────────────────────────────────────
-
-def _download_image(url: str, dest_dir: Path) -> str | None:
-    """Download image from URL to dest_dir. Return filename or None on failure."""
-    try:
-        resp = requests.get(url, timeout=30, stream=True)
-        resp.raise_for_status()
-    except Exception:
-        return None
-
-    # Derive filename from URL
-    url_path = url.split("?")[0].rstrip("/")
-    filename = os.path.basename(url_path)
-    if not filename or "." not in filename:
-        import uuid
-        filename = f"img-{uuid.uuid4().hex[:8]}.png"
-
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / filename
-    dest.write_bytes(resp.content)
-    return filename
-
-
-def _fix_image_paths(md_path: Path, md_dir: Path):
-    """Post-process arxiv2md output: normalize URLs, download images to figures/ and update paths.
-
-    Linxius version outputs: ![Refer to caption](https://arxiv.org/.../figures/x.png)
-    This downloads images locally and updates paths to: ![Refer to caption](figures/x.png)
-    """
-    if not md_path.exists():
-        return
-    content = md_path.read_text(encoding="utf-8")
-    original = content
-
-    # Normalize malformed arxiv HTML URLs (doubled /html/ prefix)
-    content = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', content)
-
-    def _download_and_replace(m):
-        alt = m.group(1)
-        url = m.group(2)
-        if not url.startswith("http"):
-            return m.group(0)  # already local, skip
-        filename = _download_image(url, md_dir / "figures")
-        if filename:
-            return f"![{alt}](figures/{filename})"
-        return m.group(0)
-
-    # Match ![alt](url) with http URLs
-    content = re.sub(r'!\[([^\]]*)\]\((https?://[^)]+)\)', _download_and_replace, content)
-
-    if content != original:
-        md_path.write_text(content, encoding="utf-8")
-
 def process_link(item: dict, out_dir: Path) -> str:
     """Process a single link and save to out_dir. Return saved file path."""
     item_type = item["type"]
@@ -867,8 +815,6 @@ def process_link(item: dict, out_dir: Path) -> str:
             else:
                 content = f"---\n{related_block}---\n{content}"
         out_file.write_text(content, encoding="utf-8")
-        # Post-process: normalize URLs again (safety), download images locally
-        _fix_image_paths(out_file, arxiv_dir)
 
         return out_file
     else:
