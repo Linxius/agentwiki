@@ -632,6 +632,29 @@ def _guess_figure_caption(filename: str) -> str:
     return fname[:40]
 
 
+def _figure_url_ok(url: str) -> bool:
+    """Reject arxiv2md placeholder / badge / relative figure URLs.
+
+    Valid arxiv figures live under /figures/, /figs/, /Figures_min/ etc.
+    arxiv2md falls back to source-LaTeX for papers without an HTML version and
+    emits garbage placeholders (x1.png, x2.png) or relative paths (media/, assets/)
+    that do not resolve; badges (shields.io) are not content figures either.
+    """
+    if not url:
+        return False
+    low = url.lower()
+    if any(k in low for k in ["x1.png", "x2.png", "x3.png", "x4.png", "x5.png",
+                               "media/", "assets/", "equation", "eqn", "formula",
+                               "icon", "shields.io", "badge"]):
+        return False
+    if low.startswith("http") and "arxiv.org" in low:
+        # require an explicit figures/figs path segment -> real HTML figure
+        if "/figures/" in low or "/figs/" in low or "/figures_min/" in low or "/Figures_min/" in low:
+            return True
+        return False
+    return True
+
+
 def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
     """Generate the brief.md content from analysis results."""
     today = date_str or date.today().isoformat()
@@ -692,10 +715,10 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
 
                 # Figure / framework diagram
                 fig_url, fig_short, fig_full = _extract_figure_from_source(item, source_url=item.get("source_url", ""))
-                if fig_url:
+                if fig_url and _figure_url_ok(fig_url):
                     lines.append(f"![{fig_short}]({fig_url})")
-                    lines.append(f"**{fig_short}**")
-                    lines.append(fig_full)
+                    if fig_short:
+                        lines.append(f"**{fig_short}**")
                     lines.append("")
 
                 lines.append(f"**简介**：{item['brief']}")
@@ -703,6 +726,25 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
                 lines.append(f"**详细报告**（主要思路与方法流程）：")
                 lines.append(item['detailed_report'])
                 lines.append("")
+
+    # Append excluded items as a compact list
+    excluded = [r for r in results if r["match_level"] == "not_interested"]
+    if excluded:
+        lines.append("---")
+        lines.append("")
+        lines.append("## [已排除]")
+        lines.append("")
+        for r in excluded:
+            title = r.get("title") or (r["file"].name if isinstance(r["file"], Path) else str(r["file"]))
+            reason = r.get("reason", "").strip()
+            src = r.get("source_url", "")
+            line = f"- {title}"
+            if reason:
+                line += f"  — {reason}"
+            if src:
+                line += f"  ({src})"
+            lines.append(line)
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -935,6 +977,15 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
             "suggested_new_interests": entry.get("suggested_new_interests", []),
             "suggested_new_disinterests": entry.get("suggested_new_disinterests", []),
         })
+
+    # Collect suggestions from results (build-brief path has no auto LLM pass)
+    suggested_interests = []
+    suggested_disinterests = []
+    for _r in results:
+        for _si in (_r.get("suggested_new_interests", []) or []):
+            suggested_interests.append(_si)
+        for _sd in (_r.get("suggested_new_disinterests", []) or []):
+            suggested_disinterests.append(_sd)
 
     # Count stats
     interested = [r for r in results if r["match_level"] == "interested"]
