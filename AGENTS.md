@@ -11,32 +11,10 @@
 
 This wiki is maintained entirely by your coding agent. No API key needed — just open this repo in any agent that reads this file, and talk to it.
 
-## alphaXiv MCP
-
-通过 [alphaXiv MCP Server](https://www.alphaxiv.org/docs/mcp) 接入学术论文检索，作为 inbox 补充。配置见 `docs/setup.md`。工具在 agent 工具列表中显示为 `alphaxiv_*` 前缀，非强制依赖。
-
-| 工具 | 用途 |
-|------|------|
-| `discover_papers` | 关键词+语义搜索论文 |
-| `answer_pdf_queries` | 按问题提取论文特定页面 |
-| `read_files_from_github_repository` | 读取论文关联的 GitHub 代码 |
-| `list_library` / `save_papers_to_folder` | 文献库管理 |
-
-### ⚠️ 论文全文获取
-
-**不要用 `get_paper_content` 获取全文**（50KB 截断）。正确流程：
-
-1. **arXiv 论文**：`arxiv2md <arxiv_id> -o output.md`（解析 HTML，保留公式/结构）
-2. **精准查询**：`answer_pdf_queries paper="<id>" queries=["问题"]`
-3. **非 arXiv PDF**：`python tools/pdf2md.py <file.pdf>`
-
-安装：`pip install git+https://github.com/Linxius/arxiv2md.git`
-
 ## ⚠️ PDF Handling Rule
 
 **NEVER use the Read tool on `.pdf` files.** Always run `python tools/pdf2md.py <file.pdf>` first, then `ingest` on the generated `.md` file。
 
-**注意：** arXiv 论文用 `arxiv2md`（解析 HTML 更完整），`pdf2md.py` 仅用于非 arXiv 的本地 PDF。
 
 ## Trigger 速查
 
@@ -44,6 +22,7 @@ This wiki is maintained entirely by your coding agent. No API key needed — jus
 
 | 触发词 | 动作 | 详情 |
 |--------|------|------|
+| `import bookmarks` / `导入书签` | Edge 书签 → inbox.md → 下载 → 简报 → 归档 | [tools-reference.md](docs/tools-reference.md) |
 | `filter` / `开始筛选` | 筛选 inbox/ → 生成 brief.md | [filter.md](docs/workflows/filter.md) |
 | `deep read` / `生成深度阅读` | 对 brief 勾选条目生成报告 | [deep-read.md](docs/workflows/deep-read.md) |
 | `ingest from digest` / `合入 wiki` | digest 勾选条目合入 wiki | [ingest.md](docs/workflows/ingest.md) |
@@ -51,7 +30,6 @@ This wiki is maintained entirely by your coding agent. No API key needed — jus
 | `read paper <url>` / `深度阅读 <url>` | 直接阅读并生成深度阅读 | [deep-read.md](docs/workflows/deep-read.md) |
 | `ingest paper <url>` / `直接合入 <url>` | 直接下载并合入（跳过全部流程） | [ingest.md](docs/workflows/ingest.md) |
 | `read code` / `代码阅读` | 子代理驱动代码分析 | [code-read.md](docs/workflows/code-read.md) |
-| `search papers <query>` / `搜索论文` | alphaXiv MCP 搜索 | — |
 | `status` / `流程状态` | 检查各节点进度并建议下一步 | — |
 | `fetch sources` / `抓取源文件` | 抓取 brief 中缺失的源文件 | — |
 
@@ -85,7 +63,8 @@ wiki/         index.md log.md overview.md issues.md interests.md
               sources/ entities/ concepts/ syntheses/
 graph/        graph.json graph.html
 templates/    generic.md paper.md article.md book.md dataset.md doc.md project.md talk.md
-tools/        inbox.py filter.py deep-read.py ingest.py status.py health.py lint.py ...
+tools/        inbox.py filter.py deep-read.py ingest.py status.py health.py lint.py \
+              import-edge-bookmarks.py bookmark-tracker.py ...
 ```
 
 ## Workflows Overview
