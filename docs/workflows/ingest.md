@@ -51,6 +51,18 @@ python tools/ingest.py --paper https://example.com/article
 2. 运行 `python tools/ingest.py <output.md>` 合入 wiki
 3. 更新 `wiki/log.md` 和 `wiki/index.md`
 
+## Fallback: Brief 直接合入
+
+当源文件缺失且无法自动获取时（如 GitHub 项目源文件已被删除），可用 brief 详细报告直接合入：
+
+1. **源文件不足时**：用 brief 详细报告中的方法分析作为内容来源；用 `webfetch` 抓取网页/README 作为补充
+2. **写入 raw/{type}/<slug>.md**：创建带 frontmatter 的源文件（title/url/date/source_file）
+3. **创建 wiki/sources/<slug>.md**：按对应模板（paper/article/project）
+4. **更新 wiki/index.md、wiki/overview.md、wiki/log.md**
+5. **更新 raw/digest/brief.md** 状态为 `[x] 已合入 wiki`
+
+`ingest.py --from-digest` 已支持非 arxiv URL 自动抓取（`_utils.fetch_web_source()`），大多数场景无需手动 fallback。
+
 ## Ingest from Digest（Stage 3）
 
 Triggered by: *"ingest from digest"* or `python tools/ingest.py --from-digest YYYY-MM-DD`
@@ -113,4 +125,23 @@ Wiki 页面的 `## 原始出处` 章节必须包含：
 - Method 章节最前面放框架图/流程图/管线图（用 arxiv HTML URL 链接，如 `https://arxiv.org/html/.../figures/images/...`）
 - 包含 Related Work Analysis 章节
 - Method 章节双重写作：整体思路（直白解释设计动机）+ 复现细节（公式、超参数）
+
+## Phase1/Phase2 两阶段协议
+
+`ingest.py` 的 LLM 调用自动转为两阶段协议，避免主 agent 处理大 prompt：
+
+1. **Phase1（`--phase1`）**：脚本构建 prompt，写入 `raw/.tmp/wiki-tasks/<task>.json`，立即返回。不会修改 wiki。
+2. **子代理处理**：主 agent 检测到 task 文件后 spawn 子代理读取 prompt、执行 LLM 推理，结果写入 `raw/.tmp/wiki-results/<task>.json` + `.done` 标记。
+3. **Phase2（`--phase2`）**：脚本读取子代理结果，解析 JSON，创建/更新 wiki 页面、索引、日志。
+
+**何时触发**：
+
+- `ingest.py --from-digest` 自动进入 `--phase1` 模式
+- `ingest.py --from-digest --auto` 自动 phase1 → 等待子代理 → phase2（全自动）
+- `ingest.py <file>`（非 phase1）直接调用 LLM（如禁用则写 task 文件）
+
+**安全保证**：
+- Phase1 返回 `False`，`run_from_digest` 不会删除 brief 条目或源文件
+- 仅当 Phase2 成功写入 wiki 页面后才清理临时文件
+- 异常时（JSON 解析失败、文件写入失败）抛出异常，brief 条目保留
 

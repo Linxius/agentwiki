@@ -350,6 +350,52 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
         raise RuntimeError(f"arxiv2md API 也失败: {e}")
 
 
+def fetch_web_source(url: str, out_path: Path) -> bool:
+    """Fetch a non-arxiv web page and save as markdown source file.
+
+    Priority: trafilatura (best) -> markitdown HTML->MD -> raw text.
+    Returns True on success.
+    """
+    import requests as _req
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (compatible; WikiBot/1.0)'}
+        resp = _req.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+
+        # 1) trafilatura - clean article extraction
+        try:
+            import trafilatura
+            text = trafilatura.extract(resp.text, include_formatting=True, include_links=True)
+            if text and len(text) > 200:
+                out_path.write_text(text, encoding="utf-8")
+                return True
+        except ImportError:
+            pass
+
+        # 2) markitdown - HTML->MD conversion
+        try:
+            from markitdown import MarkItDown
+            import tempfile, os as _os
+            tmp = tempfile.NamedTemporaryFile(suffix='.html', delete=False)
+            tmp.write(resp.content)
+            tmp.close()
+            md = MarkItDown(enable_plugins=False)
+            result = md.convert(tmp.name)
+            _os.unlink(tmp.name)
+            if result and result.text_content and len(result.text_content) > 200:
+                out_path.write_text(result.text_content, encoding="utf-8")
+                return True
+        except Exception:
+            pass
+
+        # 3) fallback: URL + first 10K chars
+        out_path.write_text(f"# {url}\n\nURL: {url}\n\n{resp.text[:10000]}", encoding="utf-8")
+        return bool(resp.text)
+    except Exception as e:
+        print(f"  Warning: web fetch failed for {url}: {e}")
+        return False
+
+
 # ── Phase auto-runner (shared across scripts) ──
 
 

@@ -1,3 +1,9 @@
+## [2026-07-30] ingest | RaDe-GS: Rasterizing Depth in Gaussian Splatting
+Added source. Key claims: 3D-GS 栅格化深度/法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟，远快于 NeRF 类方法。
+
+## [2026-07-30] ingest | CGVQM: Computer Graphics Video Quality Metric
+Added source. Key claims: Intel Labs 全参考视频质量指标，针对渲染失真（空间+时序伪影）校准，输出可解释感知等级与误差图，配套 CGVQD 数据集（CGF 2025）。
+
 ## [2026-07-30] ingest | TransparentGS: Fast Inverse Rendering of Transparent Objects with Gaussians
 Added source. Key claims: 基于 3D-GS 的透明物体逆向渲染框架，透明高斯基元 + 延迟折射策略 + 高斯光场探针，1 小时内完成重建，实时新视角合成。
 

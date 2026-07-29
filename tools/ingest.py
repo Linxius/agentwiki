@@ -643,6 +643,7 @@ def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
                         img_prompt_section, shared_context_path: str = "",
                         comments: str = "", deepdive_path: str = "",
                         brief_entry_ref: str = "",
+                        brief_detailed_report: str = "",
                         source_content_path: str = ""):
     """Build the LLM prompt for ingesting a source document.
     
@@ -650,12 +651,13 @@ def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
     from that file instead of receiving it inline (saves ~68KB per task).
     
     When source_content is very large (>20KB) and source_content_path is set,
-    the full source is NOT inlined — subagent reads it via its own Read tool.
+    the full source is NOT inlined - subagent reads it via its own Read tool.
     
     Args:
         comments: User/agent comments/insights to incorporate into wiki
         deepdive_path: Path to deep-read report for this entry
         brief_entry_ref: Brief.md entry reference (date + title)
+        brief_detailed_report: Brief detailed report content (method analysis)
         source_content_path: If set, subagent reads source from this file path
     """
     context_section = (
@@ -667,17 +669,24 @@ def build_ingest_prompt(source_file_repo, raw_relative_path, source_url_display,
     
     # Comments/insights section (optional)
     comments_section = ""
-    if comments or deepdive_path or brief_entry_ref:
+    if comments or deepdive_path or brief_entry_ref or brief_detailed_report:
         parts = ["\n---\n### 补充信息（必须合入 wiki）"]
         if brief_entry_ref:
             parts.append(f"- Brief 条目引用: {brief_entry_ref}")
         if deepdive_path:
             parts.append(f"- 深度阅读报告: [{deepdive_path}]({deepdive_path})")
+        if brief_detailed_report:
+            parts.append(f"- Brief 详细报告: {brief_detailed_report[:3000]}")
+            if len(brief_detailed_report) > 3000:
+                parts.append(f"  （详细报告共 {len(brief_detailed_report)} 字，仅截取前 3000 字作为参考）")
         if comments:
-            parts.append(f"- 评论/启示: {comments}")
+            parts.append(f"- 用户评论: {comments}")
         parts.append(
-            "\n请将以上评论和启示整合到 wiki 页面的 `## 评论与启示` 章节中。"
-            "使用 `os.path.relpath()` 计算所有链接的相对路径。"
+            "\n请将以上补充信息整合到 wiki 页面中："
+            "\n- Brief 详细报告中的方法分析 -> 用于 `## Method` 章节"
+            "\n- 评论/启示/用户备注 -> 用于 `## 评论与启示` 章节"
+            "\n- 深度阅读报告 -> 作为主要内容来源"
+            "\n使用 `os.path.relpath()` 计算所有链接的相对路径。"
         )
         comments_section = "\n".join(parts)
     
@@ -738,7 +747,13 @@ Return ONLY a valid JSON object with these fields (no markdown fences, no prose 
 
 def ingest(source_path: str, auto_convert: bool = True,
            comments: str = "", deepdive_path: str = "",
-           brief_entry_ref: str = ""):
+           brief_entry_ref: str = "",
+           brief_detailed_report: str = "") -> bool:
+    """Ingest a source document into the wiki.
+    
+    Returns True if wiki pages were actually created/updated,
+    False if only a phase1 task was queued (not committed yet).
+    """
     source = Path(source_path).resolve()
     if not source.exists():
         print(f"Error: file not found: {source_path}")
@@ -813,6 +828,7 @@ def ingest(source_path: str, auto_convert: bool = True,
         img_prompt_section, shared_context_path=shared_ctx_arg,
         comments=comments, deepdive_path=deepdive_path,
         brief_entry_ref=brief_entry_ref,
+        brief_detailed_report=brief_detailed_report,
         source_content_path=source_file_repo,
     )
 
@@ -829,7 +845,7 @@ def ingest(source_path: str, auto_convert: bool = True,
                 "today": today,
             },
         }])
-        return
+        return False  # task queued, not committed yet
 
     # ── Phase 2: read result from subagent ──
     if "--phase2" in sys.argv:
@@ -842,7 +858,7 @@ def ingest(source_path: str, auto_convert: bool = True,
     else:
         raw = call_llm(prompt, max_tokens=8192)
         if not raw:
-            return
+            return False  # phase1 auto-mode, not committed
 
     try:
         data = parse_json_from_response(raw)
@@ -902,6 +918,7 @@ def ingest(source_path: str, auto_convert: bool = True,
     warn = f", {broken} broken links" if broken else ""
     warn += f", {unindexed} unindexed" if unindexed else ""
     print(f"  [{slug}] {len(created_pages)} created, {len(updated_pages)} updated{warn}")
+    return True
 
 
 def _parse_entry_from_brief(lines: list[str], start_i: int, entry_lines: list[str]) -> dict:
@@ -956,7 +973,7 @@ def _group_entries_for_merge(entries: list[dict]) -> list[list[dict]]:
     
     Merge criteria (descending priority):
     1. Same non-empty source_url
-    2. Same domain + source filenames share ≥2 meaningful words (≥3 chars)
+    2. Same domain + source filenames share >=2 meaningful words (>=3 chars)
     """
     GENERIC_WORDS = {'for', 'and', 'the', 'on', 'at', 'in', 'with', 'to', 'of', 'a',
                      'from', 'by', 'via', 'using', 'based', 'real', 'time', 'end',
@@ -1149,21 +1166,35 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             # ── Auto-fetch missing source (unless --no-auto-fetch) ──
             if "--no-auto-fetch" not in sys.argv:
                 source_url = entry.get('source_url', '')
+                if not source_url:
+                    continue
                 arxiv_id = extract_arxiv_id(source_url) if source_url else None
+                src_dir = sources_base / (brief_date or "unknown")
+                src_dir.mkdir(parents=True, exist_ok=True)
+                out_path = src_dir / candidate.name
                 if arxiv_id:
-                    print(f"  ⬇️  源文件缺失，自动下载: {arxiv_id}")
-                    # Ensure source date dir exists
-                    src_dir = sources_base / (brief_date or "unknown")
-                    src_dir.mkdir(parents=True, exist_ok=True)
-                    out_path = src_dir / candidate.name
+                    print(f"  [↓] 源文件缺失，自动下载 arxiv: {arxiv_id}")
                     try:
                         from _utils import safe_download_arxiv
                         safe_download_arxiv(arxiv_id, out_path)
                         entry['file_path'] = out_path
                         entry['current_path'] = str(out_path.relative_to(REPO_ROOT))
-                        print(f"  ✅ 已下载: {out_path}")
+                        print(f"  [OK] 已下载: {out_path}")
                     except RuntimeError as e:
-                        print(f"  ⚠️  自动下载失败: {e}")
+                        print(f"  [!] arxiv 自动下载失败: {e}")
+                else:
+                    # ── Non-arxiv URL: try web fetch ──
+                    print(f"  [↓] 源文件缺失，尝试网页抓取: {source_url}")
+                    try:
+                        from _utils import fetch_web_source
+                        if fetch_web_source(source_url, out_path):
+                            entry['file_path'] = out_path
+                            entry['current_path'] = str(out_path.relative_to(REPO_ROOT))
+                            print(f"  [OK] 已下载网页源: {out_path}")
+                        else:
+                            print(f"  [!] 网页抓取失败: {source_url}")
+                    except Exception as e:
+                        print(f"  [!] 网页抓取出错: {e}")
     
     # Remove entries without resolvable files
     entries = [e for e in entries if e.get('file_path')]
@@ -1217,6 +1248,8 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                 
                 # Collect comments from all merged entries
                 comments = '; '.join([e.get('comments', '') for e in group if e.get('comments')])
+                detailed_reports = [e.get('detailed_report', '') for e in group if e.get('detailed_report')]
+                detailed_report = '\n\n'.join(detailed_reports)
                 
                 # Find deepdive report path
                 deepdive_path = _find_deepdive_for_entry(group[0], brief_date)
@@ -1224,12 +1257,14 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                 # Build brief entry reference
                 brief_ref = f"brief.md {brief_date} > {group[0].get('title', '')}"
                 
-                ingest(str(dest_path), auto_convert=True,
+                ok = ingest(str(dest_path), auto_convert=True,
                        comments=comments, deepdive_path=deepdive_path,
-                       brief_entry_ref=brief_ref)
-                # Remove all merged entries from brief.md
-                for e in group:
-                    _remove_entry_from_brief(e.get('title', '').strip(), brief_date)
+                       brief_entry_ref=brief_ref,
+                       brief_detailed_report=detailed_report)
+                if ok:
+                    # Remove all merged entries from brief.md
+                    for e in group:
+                        _remove_entry_from_brief(e.get('title', '').strip(), brief_date)
 
         else:
             # ── Single entry ──
@@ -1251,17 +1286,20 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                 
                 # Collect comments and deepdive reference
                 comments = entry.get('comments', '')
+                detailed_report = entry.get('detailed_report', '')
                 deepdive_path = _find_deepdive_for_entry(entry, brief_date)
                 brief_ref = f"brief.md {brief_date} > {entry.get('title', '')}"
                 
                 try:
-                    ingest(str(dest_path), auto_convert=True,
+                    ok = ingest(str(dest_path), auto_convert=True,
                            comments=comments, deepdive_path=deepdive_path,
-                           brief_entry_ref=brief_ref)
-                    # Only remove source after successful ingest
-                    file_path.unlink()
-                    # Remove entry from brief.md immediately (per-entry granularity)
-                    _remove_entry_from_brief(entry.get('title', '').strip(), brief_date)
+                           brief_entry_ref=brief_ref,
+                           brief_detailed_report=detailed_report)
+                    if ok:
+                        # Only remove source after successful ingest
+                        file_path.unlink()
+                        # Remove entry from brief.md immediately (per-entry granularity)
+                        _remove_entry_from_brief(entry.get('title', '').strip(), brief_date)
                 except Exception:
                     raise
 

@@ -68,35 +68,6 @@
 实验结果：Shiny Blender 上重光照 PSNR 25.72、SSIM 0.930、LPIPS 0.103，法线 MAE 2.82 最优；Stanford-ORB 法线 MAE 1.75；Glossy Synthetic 新视角 PSNR 30.46；训练约 1 小时（V100），渲染约 30 FPS，较 NeRF 方法提速约 4 倍。
 局限性：假设远场光照，难以处理近场互反射；对凹面与互反射建模不足，复杂凹面几何易出错。
 
-#### RaDe-GS: Rasterizing Depth in Gaussian Splatting
-- 来源: https://arxiv.org/abs/2406.01467
-- 源文件: [raw/digest/sources/2026-07-29/arxiv-240601467-radegs.md](/raw/digest/sources/2026-07-29/arxiv-240601467-radegs.md)
-- 标题: RaDe-GS：在高斯泼溅中栅格化深度
-- 领域: 计算机视觉 / 三维重建 / 高斯泼溅
-- 关键词: 3D Gaussian Splatting, depth rasterization, surface normal, surface reconstruction, TSDF, mesh extraction
-- 匹配: 3D高斯泼溅/3DGS, 表面重建, 实时渲染
-- 理由: 论文针对 3D-GS 难以提取精确几何的痛点，提出在通用 3D 高斯上栅格化计算逐像素空间变化深度与法线（利用局部仿射投影下高斯交点近似共面的性质），并融合 TSDF 提取网格，在 DTU 上 CD 0.68mm 且与 Neuralangelo 竞争的同时保持 3D-GS 的实时效率，与 "3DGS 表面重建" 兴趣直接相关。
-- [ ] 深度阅读
-- [ ] 合入 wiki
-- [ ] 不感兴趣
-- [ ] 不处理
-
-**简介**：RaDe-GS 提出一种栅格化的深度/法线计算方法，让通用 3D 高斯泼溅既能保持实时新视角合成，又能高精度重建三维表面并提取网格。
-
-**详细报告**（主要思路与方法流程）：
-解决的问题：原始 3D-GS 以高斯中心深度近似几何，离散无结构导致表面粗糙噪声；平面化高斯（SuGaR/2D GS）牺牲渲染质量，光线追踪法（GOF/GSDF）又引入高昂计算开销。
-简单来说就是：给每个高斯"切"出一个平面来求深度和法线，像传统光栅化一样逐像素算，而不是用慢速光线追踪，从而既不掉画质又保速度。
-方法流程：
-1. 推导透视投影下光线与 3D 高斯的"交点"为高斯值最大处（闭式解 t*）。
-2. 利用 GS 的局部仿射投影，证明在光线空间中这些交点近似共面，得到深度 d = z_c + p·(Δu, Δv) 的可栅格化线性形式。
-3. 由该平面方程求光线空间法线，再用仿射变换矩阵 J 变换回相机空间得到逐像素 3D 法线。
-4. 在光度损失 L_c 上增加深度畸变损失 L_d 与法线一致性损失 L_n 约束几何。
-5. 训练后渲染各视角深度图，融合进 TSDF 体并用 Marching Cubes 提取网格。
-实验结果：DTU 平均 Chamfer 距离 0.68mm（优于 GOF 0.74、2D GS 0.80，媲美 Neuralangelo 0.61）；Tanks&Temples F1 0.40（TSDF 融合类最优）；Synthetic-NeRF PSNR 33.60 最优，Mip-NeRF360 LPIPS 最优；DTU 训练约 8.3 分钟、TNT 约 11.5 分钟，远快于 NeRF 类方法。
-局限性：大规模场景 TSDF 融合受显存限制只能用低分辨率体素；对高反射表面处理仍困难，作者建议结合多分辨率 TSDF 与 GaussianShader 类着色改进。
-
-## [可能感兴趣]
-
 #### Mix3R: Mixing Feed-forward Reconstruction and Generative 3D Priors for Joint Multi-view Aligned 3D Reconstruction and Pose Estimation
 - 来源: https://arxiv.org/abs/2605.03359
 - 源文件: [raw/digest/sources/2026-07-29/arxiv-260503359-880f8b99.md](/raw/digest/sources/2026-07-29/arxiv-260503359-880f8b99.md)
@@ -127,7 +98,7 @@
 - 匹配: 可能相关（渲染画质评测，非 3DGS 核心）
 - 理由: CGVQM 是首个针对先进渲染技术失真（空间+时序伪影）校准的全参考视频质量指标，并配套 CGVQD 数据集；虽不直接研究 3DGS/神经渲染，但可作为实时渲染（含 3DGS）画质评测工具，故判为可能相关。关联论文 arXiv 2506.11546（CGVQM+D, CGF 2025）。
 - [ ] 深度阅读
-- [ ] 合入 wiki
+- [x] 已合入 wiki
 - [ ] 不感兴趣
 - [ ] 不处理
 

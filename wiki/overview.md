@@ -3,7 +3,7 @@ title: "Overview"
 type: synthesis
 tags: []
 sources: []
-last_updated: "2026-07-28"
+last_updated: "2026-07-30"
 ---
 
 # Overview
@@ -12,6 +12,8 @@ last_updated: "2026-07-28"
 
 ### 论文
 
+- [[RaDe-GS: Rasterizing Depth in Gaussian Splatting|ra-de-gs]] — 3D-GS 栅格化深度/法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟
+- [[CGVQM: Computer Graphics Video Quality Metric|cgvqm]] — Intel Labs 全参考视频质量指标，针对渲染失真校准，配套 CGVQD 数据集
 - [[Adaptive Shells|adaptive-shells]] — 自适应窄带渲染加速 NeRF（空间变化核+显式壳提取+窄带采样）
 - [[AMD FidelityFX Super Resolution (FSR 1.0)|fidelityfx-fsr-1]] — 代码分析
 - [[Arm Neural Super Sampling (NSS)|arm-neural-super-sampling]] — ARM 神经网络超采样项目（页面返回 404）

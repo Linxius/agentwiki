@@ -7,6 +7,9 @@ This file is maintained by the LLM. Updated on every ingest.
 
 ## Sources
 
+- [RaDe-GS: Rasterizing Depth in Gaussian Splatting](sources/ra-de-gs.md) — 在 3D-GS 上栅格化深度与法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟
+- [CGVQM: Computer Graphics Video Quality Metric](sources/cgvqm.md) — Intel Labs 全参考视频质量指标，针对渲染失真校准，配套 CGVQD 数据集
+
 - [World Tracing](sources/world-tracing-generative-pixel-aligned-geometry-beyond-the-visible) — 像素对齐多层几何扩散，单图生成完整3D场景（可见+遮挡），SOTA 几何 F1
 ## Papers
 - [TransparentGS: Fast Inverse Rendering of Transparent Objects with Gaussians](sources/transparent-gs-fast-inverse-rendering-of-transparent-objects-with-gaussians) — 3D-GS 透明物体逆向渲染：透明高斯基元 + 延迟折射 + 高斯光场探针
