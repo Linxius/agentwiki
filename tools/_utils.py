@@ -275,3 +275,122 @@ def rename_file_by_title(file_path: Path) -> Path:
         return file_path
     file_path.rename(new_path)
     return new_path
+
+
+def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
+    """Download arXiv paper via arxiv2md CLI, handling the -o directory quirk.
+    
+    arxiv2md's -o flag creates a DIRECTORY with the given name and puts the
+    actual file inside as <Title>.md. This wrapper: passes a directory to -o,
+    globs for the output file, validates content length (≥5000), and renames
+    to out_path. Falls back to Python API on CLI failure.
+    
+    Caches results in raw/.tmp/arxiv-cache/<arxiv_id>.md to avoid re-download.
+    
+    Returns content string. Raises RuntimeError if both CLI and API fail.
+    """
+    import shutil, subprocess, sys
+
+    out_dir = out_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove any leftover directory from a previous -o mistake
+    if out_path.exists() and out_path.is_dir():
+        shutil.rmtree(out_path, ignore_errors=True)
+
+    # ── Cache check ──
+    CACHE_BASE = REPO_ROOT / "raw" / ".tmp" / "arxiv-cache"
+    cache_dir = CACHE_BASE / arxiv_id
+    cache_path = cache_dir / f"{arxiv_id}.md"
+    if cache_path.exists():
+        content = cache_path.read_text(encoding="utf-8")
+        out_path.write_text(content, encoding="utf-8")
+        print(f"  📦 使用缓存: {cache_path}")
+        return content
+
+    # ── CLI mode: arxiv2md <id> -o <dir> → outputs to <dir>/<Title>.md ──
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "arxiv2md", arxiv_id,
+             "--frontmatter", "--remove-toc",
+             "-o", str(out_dir)],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0:
+            md_files = list(out_dir.glob("*.md"))
+            if md_files:
+                generated = md_files[0]
+                content = generated.read_text(encoding="utf-8")
+                if len(content) >= 5000:
+                    if generated != out_path:
+                        generated.rename(out_path)
+                    # Write to cache
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_text(content, encoding="utf-8")
+                    return content
+                print(f"  ⚠️  arxiv2md CLI 输出过短 ({len(content)} bytes)，改用 API")
+                generated.unlink(missing_ok=True)
+    except Exception as e:
+        print(f"  ⚠️  arxiv2md CLI 失败 ({e})，改用 API")
+
+    # ── Fallback: Python API ──
+    try:
+        from arxiv2md import ingest_paper_sync
+        result = ingest_paper_sync(arxiv_id)
+        import re as _re
+        content = _re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
+        out_path.write_text(content, encoding="utf-8")
+        # Write to cache
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(content, encoding="utf-8")
+        return content
+    except ImportError:
+        raise RuntimeError("arxiv2md not installed")
+    except Exception as e:
+        raise RuntimeError(f"arxiv2md API 也失败: {e}")
+
+
+# ── Phase auto-runner (shared across scripts) ──
+
+
+def run_phase_auto(phase2_args: list[str] | None = None):
+    """Blocking phase1→auto-spawn→phase2 runner.
+    
+    Call this AFTER prepare_tasks() has written task files.
+    1. Prints spawn instruction for the agent.
+    2. Calls wait_for_tasks() to poll for .done markers.
+    3. When all done, re-executes the script with --phase2.
+    
+    phase2_args: override sys.argv for phase2 re-execution (e.g. ['--phase2']).
+                 Defaults to original args + '--phase2'.
+    """
+    TASK_DIR.mkdir(parents=True, exist_ok=True)
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = TASK_DIR / "manifest.json"
+    if not manifest_path.exists():
+        print("Error: no manifest.json found. Run --phase1 first.")
+        return
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    task_ids = [t["id"] for t in manifest["tasks"]]
+    if not task_ids:
+        print("No tasks to process.")
+        return
+
+    print(f"\n{'='*60}")
+    print(f"📋 {len(task_ids)} task(s) ready. Spawn subagents now.")
+    for t in manifest["tasks"]:
+        print(f"  → {t['id']}")
+    print(f"{'='*60}\n")
+
+    # Poll until all tasks complete
+    print(f"⏳ Waiting for {len(task_ids)} subagent(s) to complete...")
+    if wait_for_tasks(task_ids, timeout=900, poll=10):
+        print(f"✅ All tasks completed. Re-running with --phase2...")
+        import subprocess, sys
+        args = phase2_args if phase2_args is not None else sys.argv + ["--phase2"]
+        subprocess.run([sys.executable] + args)
+    else:
+        print(f"⚠️  Timeout waiting for tasks: {task_ids}")
+        print(f"   Once done, re-run with --phase2")

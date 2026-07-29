@@ -1,3 +1,12 @@
+## [2026-07-30] ingest | TransparentGS: Fast Inverse Rendering of Transparent Objects with Gaussians
+Added source. Key claims: 基于 3D-GS 的透明物体逆向渲染框架，透明高斯基元 + 延迟折射策略 + 高斯光场探针，1 小时内完成重建，实时新视角合成。
+
+## [2026-07-30] ingest | A LoD of Gaussians: Out-of-Core Training and Rendering for Seamless Ultra-Large Scene Reconstruction
+Added source. Key claims: 消费级 GPU 上城市级 3DGS 无分块训练与渲染，核外存储 + 层级顺序点树 (HSPT) + 流式加载，24GB 显存处理上亿高斯体。
+
+## [2026-07-30] ingest | SDFRaster: Distance Field Rasterization for End-to-End Mesh Reconstruction
+Added source. Key claims: 可光栅化的 SDF 框架，Delaunay 四面体化 + 四面体光栅化 + 可微 Marching Tetrahedra，DTU 上 Chamfer 距离优于 2DGS，训练 98 分钟（远快于 NeRF 类方法 12+ 小时）。
+
 ## [2026-07-29] filter | 17 files processed（含 2 篇 alphaXiv 补全：GlossyGS、RaDe-GS）
 
 

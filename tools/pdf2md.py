@@ -83,11 +83,11 @@ def convert_arxiv(arxiv_id: str, output: Path) -> Path:
         print(f"Error: arxiv2md not installed.\n{install_hint(pip_name)}")
         sys.exit(1)
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(["arxiv2md", arxiv_id, "-o", str(output)])
-
-    if result.returncode != 0:
-        print(f"Error: arxiv2md failed with exit code {result.returncode}")
+    from _utils import safe_download_arxiv
+    try:
+        safe_download_arxiv(arxiv_id, output)
+    except RuntimeError as e:
+        print(f"Error: {e}")
         sys.exit(1)
 
     # Normalize malformed arxiv HTML URLs (doubled /html/ prefix) in the output

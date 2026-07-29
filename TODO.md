@@ -1,15 +1,13 @@
 # Wiki Pipeline 待优化清单
 
-> 优先级：P0（阻塞/数据安全）> P1（流程缺陷）> P2（效率/质量）
->
-> 所有 P0、P1 问题已处理完成。
+> 优先级：P0（数据安全/阻塞）> P1（流程缺陷）> P2（效率/质量）
 
 ---
 
 ## 已完成 ✓
 
 ### P0 修复
-- [x] **`call_llm()` 不崩溃** → 改为自动创建 task 文件（phase1）返回空字符串，不再 `sys.exit(1)`。附带 `auto_call_or_phase1()` 辅助函数
+- [x] **`call_llm()` 不崩溃** → 改为自动创建 task 文件（phase1）返回空字符串，不再 `sys.exit(1)`. `auto_call_or_phase1()` 辅助函数
 - [x] **RESULT_DIR 自动创建** → `prepare_tasks()` 中增加 `RESULT_DIR.mkdir()`
 - [x] **子代理写入同步机制** → `write_result()` 写 `.done` 标记；`read_results()` 只读有 `.done` 的结果；`wait_for_tasks()` 轮询函数
 - [x] **TASK/RESULT_DIR 从 `/tmp/` 移到 `raw/.tmp/`** → `_utils.py`
@@ -60,13 +58,52 @@
 
 ## 待处理
 
-### P1 修复
-- (All P1 items resolved ✓)
+### P0: arxiv2md 下载数据安全
 
-### P2 修复
-- [ ] **phase1/phase2 工作流对单篇论文过于复杂** → 考虑加 `--direct` 标志跳过文件协议，直接子代理处理
-- [ ] **Windows 路径转义问题** → `actor` 工具 prompt 中反斜杠导致 JSON 解析失败
-- [ ] **`ingest.py` 多处 Windows 兼容性** → `os.path.relpath`、Path 操作在 Windows 下产生反斜杠
+**问题**：`arxiv2md -o <filename>` 把 filename 当作**目录**创建，实际文件放在 `<filename>/<paper-title>.md` 内。
+
+**已修复**：
+- [x] **封装 `safe_download_arxiv(arxiv_id, out_path)`** 到 `_utils.py`：传递目录给 `-o`，glob 找文件，验证长度 ≥5000，rename 到目标路径；CLI 失败时 fallback 到 Python API
+- [x] **修复 `pdf2md.py:convert_arxiv()`**：改用 `safe_download_arxiv`，不再直接 `-o <file>`
+- [x] **`inbox.py:fetch_arxiv()`** 已使用正确模式（目录传参 + glob），无需修改
+- [x] **仍有 `-o` 直接传文件的其他调用点？确认只有 pdf2md.py 一处** → 已确认，无其他遗留
+
+### P1: `ingest.py raw/digest` 误用
+
+**问题**：`ingest.py raw/digest` 递归找到所有 .md 文件，不解析复选框。
+
+**已修复**：
+- [x] **输入检测**：检测到 `digest` 在路径中时弹出警告，建议使用 `--from-digest`
+
+### P1: `run_from_digest` 源文件缺失时自动下载
+
+**问题**：brief 标记条目引用的源文件可能不存在。
+
+**已修复**：
+- [x] **自动下载**：`run_from_digest` 检测到源文件缺失时，从 `source_url` 提取 arxiv ID 调用 `safe_download_arxiv`
+- [x] **`--no-auto-fetch` 标志**：`ingest.py --from-digest --no-auto-fetch` 可选关闭
+
+### P1: 归档前备份 + 未标记条目保护
+
+**已修复**：
+- [x] **按条目逐个移除**：每成功 ingest 一个条目，立即从 brief.md 移除该条目，其余不动
+- [x] **`brief.md.orig`**：已加入 `.gitignore` 并删除（brief 已归档，备份过时）
+- [x] 不需要 `run_archive()` 整体归档
+
+### P2: 两阶段协议自动化
+
+**问题**：当前 agent 需手动 spawn 子代理处理 task 文件，然后再跑 phase2。
+
+**已修复**：
+- [x] **`--auto` 标志**：`ingest.py --from-digest --auto` 自动 phase1 → 等待子代理 → phase2
+- [x] **`run_phase_auto()`** 函数在 `_utils.py`：阻塞等待所有 task 的 `.done` 标记后自动执行 phase2
+
+### P2: 重复下载优化
+
+**问题**：同一论文在不同流程中可能被多次下载。
+
+**已修复**：
+- [x] **arxiv 缓存**：`safe_download_arxiv()` 写入 `raw/.tmp/arxiv-cache/<arxiv_id>/<arxiv_id>.md`，下次下载直接读取
 
 ---
 

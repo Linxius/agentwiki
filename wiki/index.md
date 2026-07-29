@@ -9,6 +9,9 @@ This file is maintained by the LLM. Updated on every ingest.
 
 - [World Tracing](sources/world-tracing-generative-pixel-aligned-geometry-beyond-the-visible) — 像素对齐多层几何扩散，单图生成完整3D场景（可见+遮挡），SOTA 几何 F1
 ## Papers
+- [TransparentGS: Fast Inverse Rendering of Transparent Objects with Gaussians](sources/transparent-gs-fast-inverse-rendering-of-transparent-objects-with-gaussians) — 3D-GS 透明物体逆向渲染：透明高斯基元 + 延迟折射 + 高斯光场探针
+- [A LoD of Gaussians](sources/a-lod-of-gaussians) — 消费级 GPU 城市级 3DGS 无分块训练：核外存储 + HSPT + 流式渲染
+- [SDFRaster](sources/sdfraster) — 可光栅化 SDF 端到端网格重建：Delaunay 四面体化 + 可微 Marching Tetrahedra
 - [Rectified Flow](sources/rectified-flow) — Rectified Flow：学习直线轨迹 ODE 实现快速生成和传输
 ## Papers
 - [Arm Neural Super Sampling (NSS)](sources/arm-neural-super-sampling) — ARM 神经网络超采样项目（页面返回 404）

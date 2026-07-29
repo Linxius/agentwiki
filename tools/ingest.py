@@ -12,6 +12,9 @@ Usage:
     python tools/ingest.py --paper <arxiv-id-or-url>    # direct paper ingest (skip inbox)
     python tools/ingest.py --phase1                     # write prompts to files for subagent
     python tools/ingest.py --phase2                     # read results from subagent
+    python tools/ingest.py --from-digest                # ingest from digest brief (phase1)
+    python tools/ingest.py --from-digest --auto         # phase1 → wait subagents → phase2
+    python tools/ingest.py --from-digest --no-auto-fetch  # skip auto-downloading missing sources
 
 Supported formats (auto-converted via markitdown):
     .pdf .docx .pptx .xlsx .html .htm .txt .csv .json .xml
@@ -121,7 +124,7 @@ def build_wiki_context() -> str:
     if sources_dir.exists():
         recent = sorted(sources_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
         for p in recent:
-            parts.append(f"## {p.relative_to(REPO_ROOT)}\n{p.read_text()}")
+            parts.append(f"## {p.relative_to(REPO_ROOT)}\n{p.read_text(encoding='utf-8')}")
     return "\n\n---\n\n".join(parts)
 
 
@@ -1040,6 +1043,26 @@ def _combine_source_files(file_paths: list[Path]) -> Path | None:
     return temp
 
 
+def _remove_entry_from_brief(title: str, brief_date: str | None):
+    """Remove a single entry from brief.md by title. If brief becomes empty, set '暂无待处理' state."""
+    if not title:
+        return
+    _brief_file = REPO_ROOT / "raw" / "digest" / "brief.md"
+    if not _brief_file.exists():
+        return
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT / "tools"))
+    from brief import remove_entry, parse_entries, _empty_brief
+    from datetime import date as _date
+    _content = _brief_file.read_text(encoding="utf-8")
+    _content = remove_entry(_content, title)
+    if not parse_entries(_content):
+        bd = brief_date or _date.today().isoformat()
+        _content = _empty_brief(bd)
+    _brief_file.write_text(_content, encoding="utf-8")
+    print(f"  Removed entry: {title}")
+
+
 def run_from_digest(date_str: str = None, auto_yes: bool = False):
     """Process files from digest/YYYY-MM-DD/brief.md marked for wiki ingest.
     
@@ -1122,6 +1145,25 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             if found:
                 entry['file_path'] = found
                 entry['current_path'] = str(found.relative_to(REPO_ROOT))
+        if not entry.get('file_path'):
+            # ── Auto-fetch missing source (unless --no-auto-fetch) ──
+            if "--no-auto-fetch" not in sys.argv:
+                source_url = entry.get('source_url', '')
+                arxiv_id = extract_arxiv_id(source_url) if source_url else None
+                if arxiv_id:
+                    print(f"  ⬇️  源文件缺失，自动下载: {arxiv_id}")
+                    # Ensure source date dir exists
+                    src_dir = sources_base / (brief_date or "unknown")
+                    src_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = src_dir / candidate.name
+                    try:
+                        from _utils import safe_download_arxiv
+                        safe_download_arxiv(arxiv_id, out_path)
+                        entry['file_path'] = out_path
+                        entry['current_path'] = str(out_path.relative_to(REPO_ROOT))
+                        print(f"  ✅ 已下载: {out_path}")
+                    except RuntimeError as e:
+                        print(f"  ⚠️  自动下载失败: {e}")
     
     # Remove entries without resolvable files
     entries = [e for e in entries if e.get('file_path')]
@@ -1185,59 +1227,50 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                 ingest(str(dest_path), auto_convert=True,
                        comments=comments, deepdive_path=deepdive_path,
                        brief_entry_ref=brief_ref)
+                # Remove all merged entries from brief.md
+                for e in group:
+                    _remove_entry_from_brief(e.get('title', '').strip(), brief_date)
+
         else:
             # ── Single entry ──
-            entry = group[0]
-            file_path = entry['file_path']
-            
-            category = entry.get('category', 'papers')
-            dest_dir = REPO_ROOT / "raw" / category
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dest_path = dest_dir / file_path.name
-            
-            if dest_path.exists():
-                continue
-            
-            shutil.copy2(str(file_path), str(dest_path))
-            
-            if entry.get('source_url'):
-                inject_source_url(dest_path, entry['source_url'])
-            
-            # Collect comments and deepdive reference
-            comments = entry.get('comments', '')
-            deepdive_path = _find_deepdive_for_entry(entry, brief_date)
-            brief_ref = f"brief.md {brief_date} > {entry.get('title', '')}"
-            
-            try:
-                ingest(str(dest_path), auto_convert=True,
-                       comments=comments, deepdive_path=deepdive_path,
-                       brief_entry_ref=brief_ref)
-                # Only remove source after successful ingest
-                file_path.unlink()
-            except Exception:
-                raise
+                entry = group[0]
+                file_path = entry['file_path']
+                
+                category = entry.get('category', 'papers')
+                dest_dir = REPO_ROOT / "raw" / category
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest_path = dest_dir / file_path.name
+                
+                if dest_path.exists():
+                    continue
+                
+                shutil.copy2(str(file_path), str(dest_path))
+                
+                if entry.get('source_url'):
+                    inject_source_url(dest_path, entry['source_url'])
+                
+                # Collect comments and deepdive reference
+                comments = entry.get('comments', '')
+                deepdive_path = _find_deepdive_for_entry(entry, brief_date)
+                brief_ref = f"brief.md {brief_date} > {entry.get('title', '')}"
+                
+                try:
+                    ingest(str(dest_path), auto_convert=True,
+                           comments=comments, deepdive_path=deepdive_path,
+                           brief_entry_ref=brief_ref)
+                    # Only remove source after successful ingest
+                    file_path.unlink()
+                    # Remove entry from brief.md immediately (per-entry granularity)
+                    _remove_entry_from_brief(entry.get('title', '').strip(), brief_date)
+                except Exception:
+                    raise
 
-    # ── Update brief.md: mark entries as ingested + auto-archive ──
-    _brief_file = REPO_ROOT / "raw" / "digest" / "brief.md"
-    if _brief_file.exists():
-        import sys as _sys
-        _sys.path.insert(0, str(REPO_ROOT / "tools"))
-        from brief import mark_entry_done, run_archive
-        _content = _brief_file.read_text(encoding="utf-8")
-        titles_done = set()
-        for group in merged_groups:
-            for e in group:
-                title = e.get('title', '').strip()
-                if title:
-                    _content = mark_entry_done(_content, title, '合入 wiki')
-                    titles_done.add(title)
-        _brief_file.write_text(_content, encoding="utf-8")
-        if titles_done:
-            print(f"\n📝 brief.md: {len(titles_done)} entries marked as 已合入")
-        # Auto-archive completed date groups
-        archived = run_archive()
-        if archived:
-            print(f"  ✅ 已归档: {', '.join(archived)}")
+    # ── Auto mode: wait for subagents + run phase2 ──
+    if "--auto" in sys.argv:
+        from _utils import run_phase_auto
+        # Re-run without --auto, with --phase2
+        phase2_args = [a for a in sys.argv if a != "--auto"] + ["--phase2"]
+        run_phase_auto(phase2_args)
 
 
 # ── arXiv patterns (shared with deep-read.py) ──
@@ -1527,7 +1560,12 @@ if __name__ == "__main__":
     no_convert = "--no-convert" in sys.argv
     from_digest = "--from-digest" in sys.argv
     direct_paper = "--paper" in sys.argv
+    auto_mode = "--auto" in sys.argv
     date_str = None
+    
+    # Handle --auto: merge --phase1 behavior
+    if auto_mode and "--phase1" not in sys.argv:
+        sys.argv.append("--phase1")
     
     # Handle --paper mode
     if direct_paper:
@@ -1541,6 +1579,21 @@ if __name__ == "__main__":
             sys.exit(1)
     
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    # ── 检测 raw/digest 误用 ──
+    for arg in args:
+        p = Path(arg)
+        if p.is_file() and 'digest' in p.parts:
+            print(f"⚠️  直接传入 digest/* 文件将逐个处理而非解析 brief 复选框。")
+            print(f"   如需从 brief.md 合入已勾选条目，请使用: python tools/ingest.py --from-digest")
+            yn = input("  继续直接处理? [y/N] ") if sys.stdin.isatty() else "n"
+            if yn.lower() != 'y':
+                sys.exit(0)
+        if p.is_dir() and 'digest' in p.parts:
+            print(f"⚠️  传入 digest/ 目录将递归处理所有 .md 文件（含 deepdive/ 等），")
+            print(f"   不会解析 brief.md 复选框。使用 --from-digest 可正确解析复选框。")
+            yn = input("  继续递归处理? [y/N] ") if sys.stdin.isatty() else "n"
+            if yn.lower() != 'y':
+                sys.exit(0)
     for i, arg in enumerate(sys.argv[1:]):
         if arg == "--from-digest" and i+1 < len(sys.argv[1:]):
             next_arg = sys.argv[1:][i+1]

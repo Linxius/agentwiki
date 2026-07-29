@@ -48,6 +48,7 @@ raw/codes/
 raw/digest/sources/
 raw/digest/*/sources/
 raw/digest/brief.md
+raw/digest/brief.md.orig
 raw/digest/brief/*.md
 
 # === 本地配置 ===

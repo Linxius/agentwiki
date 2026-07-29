@@ -117,6 +117,24 @@ def mark_entry_done(content: str, title: str, checkbox_type: str) -> str:
     return '\n'.join(lines)
 
 
+def remove_entry(content: str, title: str) -> str:
+    """Remove the entire entry block matching `title` from brief content.
+    Returns updated content (unchanged if no match).
+    """
+    entries = parse_entries(content)
+    for e in entries:
+        if e['title'] == title:
+            lines = content.split('\n')
+            # Remove from start to end (exclusive), including trailing blank lines
+            end = e['end']
+            # Also remove trailing blank lines after the entry
+            while end < len(lines) and lines[end].strip() == '':
+                end += 1
+            del lines[e['start']:end]
+            return '\n'.join(lines).strip() + '\n'
+    return content
+
+
 def _empty_brief(today: str = '') -> str:
     t = today or _date.today().isoformat()
     return f"""# 资讯简报  {t}
