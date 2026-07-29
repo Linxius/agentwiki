@@ -1226,9 +1226,6 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                 print("   请让 agent 处理这些任务，然后运行:")
                 print(f"     python tools/filter.py --phase2")
                 return  # Skip cleanup — inbox stays untouched
-    else:
-        pass
-
     # Rebuild full results from cache (skips cached failures)
     results = rebuild_results_from_cache(cache)
 
@@ -1299,8 +1296,9 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                 print(f"  追加 {len(appended)} 条新条目到 brief.md")
             else:
                 print("  无新条目（全部已存在）")
-                existing = re.sub(r'^# 资讯简报  \d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
-                if existing != read_file(BRIEF_FILE):
+                old_date = re.search(r'# 资讯简报\s+(\d{4}-\d{2}-\d{2})', existing)
+                if old_date and old_date.group(1) != today:
+                    existing = re.sub(r'^# 资讯简报\s+\d{4}-\d{2}-\d{2}', f'# 资讯简报  {today}', existing)
                     write_file(BRIEF_FILE, existing)
         else:
             write_file(BRIEF_FILE, new_entries)

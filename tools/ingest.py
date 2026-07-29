@@ -1344,13 +1344,11 @@ def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
                     return existing
 
     # Try arxiv2md with retry on 429
-    import time
     for attempt in range(3):
         try:
             from arxiv2md import ingest_paper_sync
             result = ingest_paper_sync(arxiv_id)
-            import re as _re
-            content = _re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
+            content = re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
             out_file.write_text(content, encoding="utf-8")
             renamed = rename_file_by_title(out_file)
             return renamed
@@ -1358,25 +1356,9 @@ def _refetch_arxiv(arxiv_id: str, tmp_dir: Path) -> Path | None:
             break  # arxiv2md not installed, skip to fallback
         except Exception as e:
             if "429" in str(e) and attempt < 2:
-                wait = 10 * (attempt + 1)
-                import time as _time
-                _time.sleep(wait)
+                import time; time.sleep(10 * (attempt + 1))
             elif attempt < 2:
-                import time as _time
-                _time.sleep(5)
-            else:
-                pass
-    else:
-        # Reset for next fallback (avoid continuing in the for-else)
-        pass
-    try:
-        from arxiv2md import ingest_paper_sync
-    except ImportError:
-        pass
-    finally:
-        cache_dir = REPO_ROOT / ".arxiv2md_cache"
-        if cache_dir.exists():
-            shutil.rmtree(cache_dir, ignore_errors=True)
+                import time; time.sleep(5)
 
     # Fallback 1: fetch HTML via webfetch (more complete than API abstract)
     try:
