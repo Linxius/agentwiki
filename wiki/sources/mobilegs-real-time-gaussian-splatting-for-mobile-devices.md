@@ -3,7 +3,7 @@ title: "Mobile-GS: Real-time Gaussian Splatting for Mobile Devices"
 type: source
 tags: [paper, 3dgs, mobile, real-time, compression, order-independent-rendering]
 date: 2026-07-31
-source_file: raw/papers/arxiv-2603.11531.md
+source_file: raw/papers/Mobile-GS-Real-time-Gaussian-Splatting-for-Mobile-Devices.md
 url: https://arxiv.org/abs/2603.11531
 venue: "ICLR 2026"
 published: 2026
@@ -15,7 +15,7 @@ links:
 Mobile-GS 是针对移动设备定制的实时 3D 高斯泼溅方法，在骁龙 8 Gen 3 GPU 上达到 116 FPS 渲染速度。核心创新包括：深度感知无排序渲染（消除排序瓶颈）、一阶梯度球谐蒸馏（降低存储）、神经向量量化（压缩高斯参数）、基于贡献的剪枝（减少高斯数量）。这四种技术组合实现了实时渲染和紧凑模型尺寸，同时保持高质量视觉保真度。
 
 ## 原始出处
-- 原始文件: [raw/papers/arxiv-2603.11531.md](../../raw/papers/arxiv-2603.11531.md)
+- 原始文件: [raw/papers/Mobile-GS-Real-time-Gaussian-Splatting-for-Mobile-Devices.md](../../raw/papers/Mobile-GS-Real-time-Gaussian-Splatting-for-Mobile-Devices.md)
 - 原文链接: [https://arxiv.org/abs/2603.11531](https://arxiv.org/abs/2603.11531)
 - Brief 条目: [brief.md 2026-07-30 > ICLR2026 2603.11531 不排序+codebook量化+球谐降阶+剪枝](../digest/brief.md)
 

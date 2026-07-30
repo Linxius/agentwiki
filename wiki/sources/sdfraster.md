@@ -3,7 +3,7 @@ title: "SDFRaster: Distance Field Rasterization for End-to-End Mesh Reconstructi
 type: source
 tags: [paper, mesh-reconstruction, sdf, rasterization, marching-tetrahedra, neural-sdf]
 date: 2026-07-30
-source_file: raw/papers/arxiv-260423537-215ed516.md
+source_file: raw/papers/Distance-Field-Rasterization-for-End-to-End-Mesh-Reconstruction.md
 url: "https://arxiv.org/abs/2604.23537"
 venue: ""
 published: 2026
@@ -16,7 +16,7 @@ SDFRaster 提出一种**基于距离场光栅化的端到端网格重建**方法
 
 ## 原始出处
 
-- 原始文件: [raw/papers/arxiv-260423537-215ed516.md](../../raw/papers/arxiv-260423537-215ed516.md)
+- 原始文件: [raw/papers/Distance-Field-Rasterization-for-End-to-End-Mesh-Reconstruction.md](../../raw/papers/Distance-Field-Rasterization-for-End-to-End-Mesh-Reconstruction.md)
 - 原文链接: [https://arxiv.org/abs/2604.23537](https://arxiv.org/abs/2604.23537)
 - Brief 条目: [brief.md 2026-07-29 > Distance Field Rasterization for End-to-End Mesh Reconstruction](../../raw/digest/brief.md)
 

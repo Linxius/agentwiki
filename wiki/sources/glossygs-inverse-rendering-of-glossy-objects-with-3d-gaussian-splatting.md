@@ -3,7 +3,7 @@ title: "GlossyGS: Inverse Rendering of Glossy Objects with 3D Gaussian Splatting
 type: source
 tags: [paper, 3dgs, inverse-rendering, glossy-objects, brdf, normal-prefiltering]
 date: 2026-07-31
-source_file: raw/papers/arxiv-241013349-glossygs.md
+source_file: raw/papers/GlossyGS-Inverse-Rendering-of-Glossy-Objects-with-3D-Gaussian-Splatting.md
 url: https://arxiv.org/abs/2410.13349
 venue: ""
 published: 2024
@@ -14,7 +14,7 @@ links: []
 GlossyGS 提出了一种面向光泽物体的 3D 高斯泼溅逆渲染框架，从多视角图像恢复几何与材质（反照率、粗糙度、金属度、法线），并支持物理重光照。核心创新包括法线图预滤波策略（先 α-blend 材质图再着色，解决镜面反射非线性问题）与微表面几何分割先验（基于 DINOv2+DPT 的粗糙度分割约束），实现几何/材质解耦并达到实时（约 30 FPS）重光照。
 
 ## 原始出处
-- 原始文件: [raw/papers/arxiv-241013349-glossygs.md](../../raw/papers/arxiv-241013349-glossygs.md)
+- 原始文件: [raw/papers/GlossyGS-Inverse-Rendering-of-Glossy-Objects-with-3D-Gaussian-Splatting.md](../../raw/papers/GlossyGS-Inverse-Rendering-of-Glossy-Objects-with-3D-Gaussian-Splatting.md)
 - 原文链接: [https://arxiv.org/abs/2410.13349](https://arxiv.org/abs/2410.13349)
 - Brief 条目: [brief.md 2026-07-30 > GlossyGS: Inverse Rendering of Glossy Objects with 3D Gaussian Splatting](../digest/brief.md)
 

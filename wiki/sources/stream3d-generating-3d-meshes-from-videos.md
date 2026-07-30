@@ -3,8 +3,8 @@ title: "STREAM3D: Generating 3D Meshes from Videos"
 type: source
 tags: [paper, video-to-mesh, 3d-reconstruction, mesh-generation, single-view]
 date: 2026-07-31
-source_file: raw/papers/arxiv-2505.21472.md
-url: https://arxiv.org/abs/2505.21472
+source_file: raw/papers/Stream3D-Sequential-Multi-View-3D-Generation-via-Evidential-Memory.md
+url: https://arxiv.org/abs/2605.21472
 venue: ""
 published: 2025
 links:
@@ -15,8 +15,8 @@ links:
 STREAM3D 从视频序列生成高质量 3D 网格，属于单目/视频到 3D 重建方向。该方法利用视频中的多视角信息和时间一致性，从无位姿视频序列直接生成定向点云和高质量网格。作为 wiki 方法列表条目，建议关注其从视频到 mesh 的生成管线和多视角一致性建模技术。
 
 ## 原始出处
-- 原始文件: [raw/papers/arxiv-2505.21472.md](../../raw/papers/arxiv-2505.21472.md)
-- 原文链接: [https://arxiv.org/abs/2505.21472](https://arxiv.org/abs/2505.21472)
+- 原始文件: [raw/papers/Stream3D-Sequential-Multi-View-3D-Generation-via-Evidential-Memory.md](../../raw/papers/Stream3D-Sequential-Multi-View-3D-Generation-via-Evidential-Memory.md)
+- 原文链接: [https://arxiv.org/abs/2605.21472](https://arxiv.org/abs/2605.21472)
 - Brief 条目: [brief.md 2026-07-30 > 2505.21472 STREAM3D 视频生成mesh](../digest/brief.md)
 
 ## Key Contributions

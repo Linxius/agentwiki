@@ -1,11 +1,9 @@
-#### Paper Template (`raw/papers/`)
-```markdown
 ---
 title: "RaDe-GS: Rasterizing Depth in Gaussian Splatting"
 type: source
 tags: [paper]
 date: 2026-07-30
-source_file: raw/papers/arxiv-240601467-radegs.md
+source_file: raw/papers/RaDe-GS-Rasterizing-Depth-in-Gaussian-Splatting.md
 url: "https://arxiv.org/abs/2406.01467"
 venue: ""
 published: 2024
@@ -18,7 +16,7 @@ RaDe-GS 提出一种在通用 3D 高斯泼溅（3D-GS）上栅格化计算逐像
 
 ## 原始出处
 
-- 原始文件: [raw/papers/arxiv-240601467-radegs.md](../../raw/papers/arxiv-240601467-radegs.md)
+- 原始文件: [raw/papers/RaDe-GS-Rasterizing-Depth-in-Gaussian-Splatting.md](../../raw/papers/RaDe-GS-Rasterizing-Depth-in-Gaussian-Splatting.md)
 - 原文链接: [https://arxiv.org/abs/2406.01467](https://arxiv.org/abs/2406.01467)
 - Brief 条目: [brief.md 2026-07-29 > RaDe-GS: Rasterizing Depth in Gaussian Splatting](../../raw/digest/brief.md)
 - 深度阅读报告: N/A

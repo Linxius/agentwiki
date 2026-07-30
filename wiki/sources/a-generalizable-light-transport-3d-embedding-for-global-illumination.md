@@ -3,7 +3,7 @@ title: "A Generalizable Light Transport 3D Embedding for Global Illumination"
 type: source
 tags: [paper, global-illumination, transformer, point-cloud, generalizable-neural-rendering, light-transport]
 date: 2026-07-31
-source_file: raw/papers/arxiv-2510.18189.md
+source_file: raw/papers/A-Generalizable-Light-Transport-3D-Embedding-for-Global-Illumination.md
 url: https://arxiv.org/abs/2510.18189
 venue: ""
 published: 2025
@@ -14,7 +14,7 @@ links: []
 该论文提出一种可泛化的光传输 3D 嵌入表示，直接从 3D 场景配置预测全局光照（GI），无需光栅化或路径追踪的光照提示、无需每场景重训练、无屏幕空间限制。核心方法采用基于点的表示将嵌入与原始场景拓扑解耦，并使用线性复杂度 Transformer 编码长程光传输。该设计扩展到包含百万级三角形的环境，实现了首个在复杂高保真室内场景上的可泛化 GI 学习。
 
 ## 原始出处
-- 原始文件: [raw/papers/arxiv-2510.18189.md](../../raw/papers/arxiv-2510.18189.md)
+- 原始文件: [raw/papers/A-Generalizable-Light-Transport-3D-Embedding-for-Global-Illumination.md](../../raw/papers/A-Generalizable-Light-Transport-3D-Embedding-for-Global-Illumination.md)
 - 原文链接: [https://arxiv.org/abs/2510.18189](https://arxiv.org/abs/2510.18189)
 - Brief 条目: [brief.md 2026-07-30 > 2510.18189 3D室内场景全局光照Transformer预测](../digest/brief.md)
 

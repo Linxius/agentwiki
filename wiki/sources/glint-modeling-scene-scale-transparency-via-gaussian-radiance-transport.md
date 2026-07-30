@@ -3,7 +3,7 @@ title: "GLINT: Modeling Scene-Scale Transparency via Gaussian Radiance Transport
 type: source
 tags: [paper, 3dgs, transparency, inverse-rendering, glass, radiance-transport]
 date: 2026-07-31
-source_file: raw/papers/arxiv-2603.26181.md
+source_file: raw/papers/GLINT-Modeling-Scene-Scale-Transparency-via-Gaussian-Radiance-Transport.md
 url: https://arxiv.org/abs/2603.26181
 venue: "CVPR 2026"
 published: 2026
@@ -15,7 +15,7 @@ links:
 GLINT 是一个用于场景尺度透明度重建的 Gaussian Light INverse-rendering 框架。核心挑战在于 3DGS 的单体 alpha blending 公式将透明界面和透过玻璃观察到的传输几何的辐射贡献纠缠在一起。GLINT 通过显式分解的高斯表示对场景建模，将基元明确划分为界面、传输和反射组件，使渲染器能够同时使用光栅化和光线追踪来重建多路径辐射传输。优化过程中，GLINT 利用预训练视频重光照模型的几何和材质先验来引导透明度定位。
 
 ## 原始出处
-- 原始文件: [raw/papers/arxiv-2603.26181.md](../../raw/papers/arxiv-2603.26181.md)
+- 原始文件: [raw/papers/GLINT-Modeling-Scene-Scale-Transparency-via-Gaussian-Radiance-Transport.md](../../raw/papers/GLINT-Modeling-Scene-Scale-Transparency-via-Gaussian-Radiance-Transport.md)
 - 原文链接: [https://arxiv.org/abs/2603.26181](https://arxiv.org/abs/2603.26181)
 - Brief 条目: [brief.md 2026-07-30 > CVPR2026 2603.26181 透明高斯 GLINT](../digest/brief.md)
 

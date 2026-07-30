@@ -3,7 +3,7 @@ title: "Ref-GS: Directional Factorization for 2D Gaussian Splatting"
 type: source
 tags: [paper, 3dgs, 2dgs, reflection, deferred-rendering, sph-mip, directional-encoding]
 date: 2026-07-31
-source_file: raw/papers/arxiv-2412.00905.md
+source_file: raw/papers/Ref-GS-Directional-Factorization-for-2D-Gaussian-Splatting.md
 url: https://arxiv.org/abs/2412.00905
 venue: "CVPR 2025"
 published: 2025
@@ -15,7 +15,7 @@ links:
 Ref-GS 提出了一种面向反射场景的延迟渲染高斯泼溅方法，将 3DGS 扩展至反射/镜面场景。核心创新包括：Sph-Mip 编码（捕获不同尺度的表面粗糙度）、延迟渲染（推迟视角相关颜色计算到表面法线确定后）、方向分解（通过向量外积连接几何和光照）。这四个核心组件共同解决了反射场景重建中的几何/外观歧义问题，在 ShinySynthetic 和 GlossySynthetic 上表面重建和新视角合成达到 SOTA，训练仅 12.6 分钟。
 
 ## 原始出处
-- 原始文件: [raw/papers/arxiv-2412.00905.md](../../raw/papers/arxiv-2412.00905.md)
+- 原始文件: [raw/papers/Ref-GS-Directional-Factorization-for-2D-Gaussian-Splatting.md](../../raw/papers/Ref-GS-Directional-Factorization-for-2D-Gaussian-Splatting.md)
 - 原文链接: [https://arxiv.org/abs/2412.00905](https://arxiv.org/abs/2412.00905)
 - Brief 条目: [brief.md 2026-07-30 > CVPR 2025 2412.00905 Ref-GS 反射高斯泼溅](../digest/brief.md)
 

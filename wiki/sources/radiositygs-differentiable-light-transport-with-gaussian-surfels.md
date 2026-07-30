@@ -3,7 +3,7 @@ title: "RadiosityGS: Differentiable Light Transport with Gaussian Surfels via Ad
 type: source
 tags: [paper, 3dgs, inverse-rendering, global-illumination, radiosity, relighting]
 date: 2026-07-31
-source_file: raw/papers/arxiv-2509.18497.md
+source_file: raw/papers/Differentiable-Light-Transport-with-Gaussian-Surfels-via-Adapted-Radiosity-for-Efficient-Relighting-and-Geometry-Reconstruction.md
 url: https://arxiv.org/abs/2509.18497
 venue: "SIGA 2025"
 published: 2025
@@ -15,7 +15,7 @@ links:
 RadiosityGS 从稀疏的多视角图片（每张图片对应不同的已知或未知光源位置）出发，同时重建场景的几何、材质，并能任意重光照和编辑材质。核心方法是将经典辐射度理论扩展到非二值可见性和半透明基元，在球谐系数空间操作以支持漫反射和镜面材质，实现高效的可微光传输计算。推理时实现视角无关渲染，视角变化时无需重新计算光传输，全局光照效果可达数百 FPS。
 
 ## 原始出处
-- 原始文件: [raw/papers/arxiv-2509.18497.md](../../raw/papers/arxiv-2509.18497.md)
+- 原始文件: [raw/papers/Differentiable-Light-Transport-with-Gaussian-Surfels-via-Adapted-Radiosity-for-Efficient-Relighting-and-Geometry-Reconstruction.md](../../raw/papers/Differentiable-Light-Transport-with-Gaussian-Surfels-via-Adapted-Radiosity-for-Efficient-Relighting-and-Geometry-Reconstruction.md)
 - 原文链接: [https://arxiv.org/abs/2509.18497](https://arxiv.org/abs/2509.18497)
 - Brief 条目: [brief.md 2026-07-30 > SIGA 2025 2509.18497 从稀疏的多视角图片（每张图片对应不同的已知或未知光源位置）出发，同时重建场景的几何、材质，并能任意重光照和编辑材质](../digest/brief.md)
 
