@@ -39,16 +39,50 @@ def _load_config():
     return {}
 
 
+PROMPT_FILE = REPO_ROOT / "raw" / ".tmp" / "wiki-llm-prompt.md"
+RESPONSE_FILE = REPO_ROOT / "raw" / ".tmp" / "wiki-llm-response.md"
+
+
 def call_llm(prompt, max_tokens=8192):
-    """自动转为 phase1 模式：写 task 文件到 TASK_DIR。
-    
-    之前：直接退出（已弃用）。
-    现在：自动创建 task 文件，agent 查看 TASK_DIR 即可 spawn 子代理处理。
-    完成后运行对应脚本的 --phase2。
+    """调用 LLM，支持两种模式。
+
+    模式 1 — task 文件模式（默认）：
+        写 prompt 到 TASK_DIR，返回 ""。agent 处理 task 文件后执行 --phase2。
+        由 WIKI_TASK_MODE=1 或未设置环境变量触发。
+
+    模式 2 — 直接 LLM 模式（WIKI_LLM_DIRECT=1）：
+        写 prompt 到 PROMPT_FILE，打印说明后返回 ""。
+        agent 处理 prompt，将结果写入 RESPONSE_FILE，重新运行命令即可读取。
+
+    模式 3 — 恢复模式（已存在 RESPONSE_FILE）：
+        读取 RESPONSE_FILE 内容并清空文件，返回内容字符串。
     """
+    # 模式 3: 检查是否有已写入的响应
+    if RESPONSE_FILE.exists():
+        content = RESPONSE_FILE.read_text(encoding="utf-8")
+        RESPONSE_FILE.unlink(missing_ok=True)
+        if content.strip():
+            return content
+        # 空文件 → 继续走正常流程
+
+    if os.environ.get("WIKI_LLM_DIRECT") == "1":
+        # 模式 2: 写 prompt 到单文件
+        PROMPT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PROMPT_FILE.write_text(prompt, encoding="utf-8")
+        print(f"\n{'='*60}")
+        print(f"📋 Prompt 已写入: {PROMPT_FILE}")
+        print(f"   处理步骤：")
+        print(f"   1. 读取 {PROMPT_FILE}")
+        print(f"   2. 处理请求并将结果写入 {RESPONSE_FILE}")
+        print(f"   3. 重新运行相同命令（会自动读取响应）")
+        print(f"{'='*60}\n")
+        return ""
+
+    # 模式 1: task 文件模式（兼容）
     import hashlib
     task_id = f"auto_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
     prepare_task(task_id, prompt, max_tokens)
+    print(f"  📝 Task 已写入: {TASK_DIR / task_id}.json (phase1 模式)")
     return ""
 
 
@@ -192,7 +226,12 @@ def wait_for_tasks(task_ids: list[str], timeout: int = 600, poll: int = 5) -> bo
 
 
 def clean_task_dirs():
-    """Clean up task and result directories (including .done markers and shared context)."""
+    """Clean up task and result directories (including .done markers and shared context).
+    
+    Only cleans when --clean is in sys.argv, or when called explicitly with force=True.
+    """
+    if "--clean" not in sys.argv:
+        return  # always safe — opt-in
     import shutil
     if TASK_DIR.exists():
         shutil.rmtree(TASK_DIR, ignore_errors=True)
@@ -202,6 +241,72 @@ def clean_task_dirs():
     tmp_dir = REPO_ROOT / "raw" / ".tmp"
     for f in tmp_dir.glob("wiki-ingest-context*"):
         f.unlink(missing_ok=True)
+
+
+def load_manifest() -> dict | None:
+    """Load manifest.json, return None if not found."""
+    manifest_path = TASK_DIR / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def list_all_tasks() -> list[dict]:
+    """Return all tasks from manifest.json, or empty list."""
+    manifest = load_manifest()
+    if not manifest:
+        return []
+    return manifest.get("tasks", [])
+
+
+def list_pending_tasks() -> list[dict]:
+    """Return tasks without .done markers (not yet completed)."""
+    if not RESULT_DIR.exists():
+        return list_all_tasks()
+    pending = []
+    for t in list_all_tasks():
+        tid = t["id"]
+        if not (RESULT_DIR / f"{tid}.done").exists():
+            pending.append(t)
+    return pending
+
+
+def list_failed_tasks() -> list[dict]:
+    """Return tasks with .done marker but empty result (subagent failed)."""
+    if not RESULT_DIR.exists():
+        return []
+    failed = []
+    for t in list_all_tasks():
+        tid = t["id"]
+        done = RESULT_DIR / f"{tid}.done"
+        if done.exists():
+            result_content = read_result(tid)
+            if not result_content.strip():
+                failed.append(t)
+    return failed
+
+
+def retry_failed_tasks() -> int:
+    """Re-queue failed tasks by removing their .done markers.
+    Returns count of re-queued tasks.
+    """
+    if not RESULT_DIR.exists():
+        return 0
+    count = 0
+    for t in list_all_tasks():
+        tid = t["id"]
+        done = RESULT_DIR / f"{tid}.done"
+        if done.exists():
+            result_content = read_result(tid)
+            if not result_content.strip():
+                done.unlink(missing_ok=True)
+                # Also remove any stale result file
+                for ext in (".txt", ".json"):
+                    rf = RESULT_DIR / f"{tid}{ext}"
+                    rf.unlink(missing_ok=True)
+                count += 1
+                print(f"  🔄 重排队: {tid}")
+    return count
 
 
 def all_wiki_pages():
@@ -277,15 +382,54 @@ def rename_file_by_title(file_path: Path) -> Path:
     return new_path
 
 
+def _extract_arxiv_id_from_content(content: str) -> str | None:
+    """Extract arxiv ID from YAML frontmatter url field or content body."""
+    # Frontmatter: url: "https://arxiv.org/abs/2503.10637"
+    m = re.search(r'^url:\s*["\']?https?://arxiv\.org/abs/(\d{4}\.\d{4,5})', content, re.MULTILINE)
+    if m:
+        return m.group(1)
+    # Plain text: arXiv:2503.10637
+    m = re.search(r'[Aa][Rr][Xx][Ii][Vv]:\s*(\d{4}\.\d{4,5})', content)
+    if m:
+        return m.group(1)
+    # Pattern in body: 2503.10637
+    m = re.search(r'(\d{4}\.\d{4,5})', content[:2000])
+    if m:
+        return m.group(1)
+    return None
+
+
+def _ensure_title_header(content: str) -> str:
+    """If content starts with ## or --- (not # Title), extract title and add # line."""
+    if re.match(r'^#\s+', content):
+        return content  # already has H1 title
+    # Try frontmatter title
+    fm = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+    if fm:
+        title_m = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', fm.group(1), re.MULTILINE)
+        if title_m:
+            title = title_m.group(1).strip().strip('"').strip("'")
+            rest = content[fm.end():]
+            return f"# {title}\n\n{rest}"
+    # Try first heading (## Abstract → promote)
+    h2 = re.search(r'^##\s+(.+)$', content, re.MULTILINE)
+    if h2:
+        title = h2.group(1).strip()
+        if len(title) < 100:
+            return f"# {title}\n\n{content}"
+    return content
+
+
 def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
     """Download arXiv paper via arxiv2md CLI, handling the -o directory quirk.
     
     arxiv2md's -o flag creates a DIRECTORY with the given name and puts the
     actual file inside as <Title>.md. This wrapper: passes a directory to -o,
-    globs for the output file, validates content length (≥5000), and renames
-    to out_path. Falls back to Python API on CLI failure.
+    globs for the output file, validates content length (≥5000), ensures # Title
+    header exists, and renames to out_path. Falls back to Python API on CLI failure.
     
-    Caches results in raw/.tmp/arxiv-cache/<arxiv_id>.md to avoid re-download.
+    Caches results in raw/.tmp/arxiv-cache/<arxiv_id>/<arxiv_id>.md.
+    Cache includes arxiv_id fingerprint for content validation.
     
     Returns content string. Raises RuntimeError if both CLI and API fail.
     """
@@ -302,11 +446,21 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
     CACHE_BASE = REPO_ROOT / "raw" / ".tmp" / "arxiv-cache"
     cache_dir = CACHE_BASE / arxiv_id
     cache_path = cache_dir / f"{arxiv_id}.md"
-    if cache_path.exists():
+    MIN_CACHE_SIZE = 5000
+    if cache_path.exists() and cache_path.stat().st_size >= MIN_CACHE_SIZE:
         content = cache_path.read_text(encoding="utf-8")
-        out_path.write_text(content, encoding="utf-8")
-        print(f"  📦 使用缓存: {cache_path}")
-        return content
+        # Validate cache content matches expected arxiv_id
+        cached_id = _extract_arxiv_id_from_content(content)
+        if cached_id and cached_id != arxiv_id:
+            print(f"  ⚠️  缓存内容不匹配：期望 arxiv:{arxiv_id}，实际 {cached_id}，重新下载")
+            cache_path.unlink(missing_ok=True)
+        else:
+            out_path.write_text(content, encoding="utf-8")
+            print(f"  📦 使用缓存: {cache_path}")
+            return content
+    elif cache_path.exists():
+        print(f"  ⚠️  缓存文件过小 ({cache_path.stat().st_size} bytes)，重新下载")
+        cache_path.unlink(missing_ok=True)
 
     # ── CLI mode: arxiv2md <id> -o <dir> → outputs to <dir>/<Title>.md ──
     try:
@@ -322,8 +476,17 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
                 generated = md_files[0]
                 content = generated.read_text(encoding="utf-8")
                 if len(content) >= 5000:
+                    content = _ensure_title_header(content)
                     if generated != out_path:
+                        # Handle Windows "file exists" error
+                        if out_path.exists():
+                            out_path.unlink()
                         generated.rename(out_path)
+                    out_path.write_text(content, encoding="utf-8")
+                    # Validate arxiv_id in content
+                    actual_id = _extract_arxiv_id_from_content(content)
+                    if actual_id and actual_id != arxiv_id:
+                        print(f"  ⚠️  下载内容 arxiv ID 不匹配：期望 {arxiv_id}，实际 {actual_id}")
                     # Write to cache
                     cache_dir.mkdir(parents=True, exist_ok=True)
                     cache_path.write_text(content, encoding="utf-8")
@@ -339,15 +502,36 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
         result = ingest_paper_sync(arxiv_id)
         import re as _re
         content = _re.sub(r'(arxiv\.org)/html//html/', r'\1/html/', result.content)
+        content = _ensure_title_header(content)
         out_path.write_text(content, encoding="utf-8")
-        # Write to cache
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(content, encoding="utf-8")
-        return content
+        if len(content) >= 5000:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(content, encoding="utf-8")
+            return content
+        print(f"  ⚠️  arxiv2md API 输出过短 ({len(content)} bytes)，尝试 webfetch")
     except ImportError:
         raise RuntimeError("arxiv2md not installed")
     except Exception as e:
-        raise RuntimeError(f"arxiv2md API 也失败: {e}")
+        print(f"  ⚠️  arxiv2md API 失败 ({e})，尝试 webfetch")
+
+    # ── Fallback 2: webfetch arxiv abstract page ──
+    try:
+        import requests as _req
+        abs_url = f"https://arxiv.org/abs/{arxiv_id}"
+        headers = {'User-Agent': 'Mozilla/5.0 (compatible; WikiBot/1.0)'}
+        resp = _req.get(abs_url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        import trafilatura
+        text = trafilatura.extract(resp.text, include_formatting=True) or resp.text[:50000]
+        content = _ensure_title_header(text)
+        out_path.write_text(content, encoding="utf-8")
+        if len(content) >= 1000:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(content, encoding="utf-8")
+            print(f"  [OK] webfetch 提取到 {len(content)} bytes")
+            return content
+    except Exception as e2:
+        raise RuntimeError(f"所有 fallback 均失败: arxiv2md CLI/API + webfetch ({e2})")
 
 
 def fetch_web_source(url: str, out_path: Path) -> bool:
@@ -425,9 +609,13 @@ def run_phase_auto(phase2_args: list[str] | None = None):
         return
 
     print(f"\n{'='*60}")
-    print(f"📋 {len(task_ids)} task(s) ready. Spawn subagents now.")
+    print(f"📋 {len(task_ids)} task(s) ready. Agent 请处理：")
     for t in manifest["tasks"]:
         print(f"  → {t['id']}")
+    print(f"\n选项：")
+    print(f"  a) 处理 task 后执行 --phase2")
+    print(f"  b) --retry-failed 重试空结果 task")
+    print(f"  c) --clean 清除所有 task 文件")
     print(f"{'='*60}\n")
 
     # Poll until all tasks complete

@@ -192,10 +192,12 @@ def check_overview_sync() -> dict:
     if not SYNC_SCRIPT.exists():
         return {"status": "skipped", "reason": "sync-overview.py not found"}
 
+    ENCODING_ARGS = dict(encoding='utf-8', errors='replace')
+
     # Check first
     check = subprocess.run(
         [sys.executable, str(SYNC_SCRIPT), "--check"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, **ENCODING_ARGS,
     )
 
     if check.returncode == 0:
@@ -204,13 +206,13 @@ def check_overview_sync() -> dict:
     # Auto-fix
     fix = subprocess.run(
         [sys.executable, str(SYNC_SCRIPT), "--write"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, **ENCODING_ARGS,
     )
 
     if fix.returncode == 0:
-        return {"status": "fixed", "reason": fix.stdout.strip()}
+        return {"status": "fixed", "reason": (fix.stdout or "").strip()}
     else:
-        return {"status": "skipped", "reason": f"auto-fix failed: {fix.stderr.strip()}"}
+        return {"status": "skipped", "reason": f"auto-fix failed: {(fix.stderr or '').strip()}"}
 
 
 # ── Report Generation ───────────────────────────────────────────────

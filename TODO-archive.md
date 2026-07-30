@@ -39,6 +39,42 @@
 ### P1: 深度阅读双结构
 → prompt 要求"整体思路 + 分步拆解"双重写作
 
+---
+
+## [2026-07-31] 批量修复 r2
+
+涉及文件：`_utils.py`、`ingest.py`、`deep-read.py`、`feeds.py`、`query.py`、`build_graph.py`、`refresh.py`
+
+### P0: `call_llm()` 永远不调用 LLM
+→ 新增 `WIKI_LLM_DIRECT=1` 环境变量模式：写 prompt 到 `raw/.tmp/wiki-llm-prompt.md`，agent 处理后将响应写入 `raw/.tmp/wiki-llm-response.md`，重新运行命令即可读取。保留默认 phase1 task 文件模式。
+→ 修复受影响调用者（`deep-read.py`、`ingest.py`）处理空响应的逻辑
+
+### P0: `--from-digest` 隐含追加 `--phase1`
+→ 移除 `ingest.py:1695-1696` 中 `--auto` 强制追加 `--phase1` 的代码
+→ `--from-digest` 现在可通过 `WIKI_LLM_DIRECT=1` 直接合入，或显式 `--phase1` 走 task 文件模式
+→ 合入失败时打印诊断信息
+
+### P1: arxiv2md 缓存内容错乱
+→ `safe_download_arxiv()` 缓存读取时从 frontmatter/content 提取 arxiv ID 做内容指纹校验
+→ 缓存 ID 与期望 ID 不匹配时自动失效并重新下载
+→ `rename_file_by_title()` WinError 183 处理：rename 前先 unlink 已有文件
+
+### P1: arxiv2md 输出缺少 `# Title` 标题行
+→ 新增 `_ensure_title_header()` 工具函数
+→ 如果内容缺少 `# Title`，从 YAML frontmatter `title:` 字段或首行 `##` 提取并补写
+→ `safe_download_arxiv()` 的所有路径（CLI/API/webfetch）均调用此函数
+
+### P1: 合入失败无可见性
+→ `run_from_digest()` 中 `ingest()` 返回 False 时打印 `[!] 合入失败: <标题>` + 原因提示
+
+### P2: JSON 文件中文内容在 GBK 编码下崩溃
+→ `feeds.py`：`open()` 调用增加 `encoding="utf-8"`
+→ `query.py`、`build_graph.py`、`refresh.py`：`read_text()`/`write_text()` 增加 `encoding="utf-8"`
+
+### P2: 源文件无内容一致性校验
+→ `safe_download_arxiv()` 下载后验证内容 arxiv ID 与期望一致
+→ 不一致时打印警告
+
 ### P1: 评论/启示写入 wiki
 → `ingest.py` 传递 comments→prompt；模板新增 `## 评论与启示` 章节；AGENTS.md 说明 agent 行为
 
@@ -94,6 +130,18 @@
 
 ### P2: 项目优化 skill
 → `.opencode/skills/wiki-project-optimize/SKILL.md`
+
+---
+
+## [2026-07-31] 批量修复 r3
+
+涉及文件：`_utils.py`、`filter.py`、`deep-read.py`
+
+### P2: phase1 任务失败后无保留/重试
+→ `_utils.py` 新增 `load_manifest()`、`list_all_tasks()`、`list_pending_tasks()`、`list_failed_tasks()`、`retry_failed_tasks()`
+→ `clean_task_dirs()` 改为 opt-in：只有 `--clean` 在 sys.argv 时才执行清理，默认保留 task 文件
+→ 失败后的 task 文件得以保留，可运行 `--retry-failed` 重试
+→ `run_phase_auto()` 输出信息更新，提示 `--retry-failed` 和 `--clean`
 
 ### P2: 子代理 prompt 过大
 → 策略文档化：每子代理 1 论文；共享 context 避免内联 schema
@@ -153,3 +201,86 @@
 
 ## [早期] 重复下载优化
 → arxiv 缓存到 `raw/.tmp/arxiv-cache/<arxiv_id>/`
+
+---
+
+## [2026-07-31] 工作流静默退出、源文件自动补全、有效性校验
+
+### P1: `run_from_digest` 对无 `- 源文件:` 字段条目静默跳过
+
+**触发场景**：brief 中直接写的新条目（如 RadiosityGS、Mobile-GS）没有 `- 源文件:` 字段，而 `run_from_digest` 此前 `if not source_file: continue` 直接跳过，不进入自动下载流程。
+
+**修复**：`ingest.py` `run_from_digest` — 无 `source_file` 时从 `source_url` 推断文件名（arxiv ID 或 URL slug）；每一步都 `print()` 状态：
+
+```python
+if not source_file:
+    source_url = entry.get('source_url', '')
+    arxiv_id = extract_arxiv_id(source_url)
+    slug = arxiv_id or re.sub(...)
+    source_file = f"raw/digest/sources/.../{slug}.md"
+    print(f"  [i] {title} — 无源文件字段，基于 URL 推断")
+```
+
+### P1: `ingest.py --from-digest` 静默退出
+
+**触发场景**：多个分支（无条目、日期不匹配、无 URL、下载失败）无 `print()`，用户无法判断发生了什么。
+
+**修复**：所有提前退出的分支加 `print()` 输出原因：
+
+- 无条目 → `print("No entries marked for wiki ingest.")`
+- 日期不匹配 → `print(f"Date mismatch: {a} != {b}")`
+- 无 URL → `print(f"[!] {title} — 文件不存在且无 URL，跳过")`
+- 下载失败 → `print(f"[!] arxiv 自动下载失败: {e}")`
+
+### P2: 源文件有效性校验缺失
+
+**触发场景**：arxiv2md 解析失败时生成 0 字节或仅 3 行的无效文件（如 GlossyGS 的 "Untitled Document"），但下游 ingest 仍尝试处理。
+
+**修复**：`run_from_digest` 中 `safe_download_arxiv` 后校验：
+
+```python
+if out_path.exists() and out_path.stat().st_size > 100:
+    entry['file_path'] = out_path  # 接受
+else:
+    print(f"[!] 文件过小 ({size} bytes)，跳过")
+    out_path.unlink(missing_ok=True)
+```
+
+### P2: `health.py` check_overview_sync GBK 编码崩溃
+
+**触发场景**：中文 Windows 上 `subprocess.run(capture_output=True, text=True)` 使用 GBK 解码输出，遇到非 GBK 字节时 `_readerthread` 崩溃，导致 `fix.stdout` 为 `None`。
+
+**修复**：`tools/health.py` — 添加 `encoding='utf-8', errors='replace'` 参数：
+
+```python
+ENCODING_ARGS = dict(encoding='utf-8', errors='replace')
+check = subprocess.run(..., **ENCODING_ARGS)
+```
+
+### P2: arxiv2md `-o` 嵌套目录 bug
+
+**触发场景**：`arxiv2md -o path/file.md` 把 `path/file.md` 当目录创建，内部生成 `<Title>.md`，导致调用方混淆。
+
+**修复**（arxiv2md 仓库）：`src/arxiv2md/__main__.py` — 判断 `-o` 后缀为 `.md` 时直接写文件，否则按原目录行为。
+
+```python
+if output_path.suffix.lower() == ".md":
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+else:
+    # 保持原目录行为
+    title = _extract_title(...)
+    filename = _sanitize_filename(title) + ".md"
+    output_path = output_path / filename
+```
+
+### P2: `health.py` `check_overview_sync` GBK 编码崩溃
+
+**触发场景**：中文 Windows 上 `subprocess.run(capture_output=True, text=True)` 使用系统默认 GBK 解码，遇到非 GBK 字节时 `_readerthread` 崩溃，`fix.stdout` 为 `None`，触发 `AttributeError: 'NoneType' object has no attribute 'strip'`。
+
+**修复**：`tools/health.py` — 添加 `encoding='utf-8', errors='replace'` 参数 + None 安全取值：
+
+```python
+ENCODING_ARGS = dict(encoding='utf-8', errors='replace')
+check = subprocess.run(..., **ENCODING_ARGS)
+# 同时 fix.stdout → (fix.stdout or "").strip()
+```

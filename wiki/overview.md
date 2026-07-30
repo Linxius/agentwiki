@@ -3,7 +3,7 @@ title: "Overview"
 type: synthesis
 tags: []
 sources: []
-last_updated: "2026-07-30"
+last_updated: "2026-07-31"
 ---
 
 # Overview
@@ -12,8 +12,7 @@ last_updated: "2026-07-30"
 
 ### 论文
 
-- [[RaDe-GS: Rasterizing Depth in Gaussian Splatting|ra-de-gs]] — 3D-GS 栅格化深度/法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟
-- [[CGVQM: Computer Graphics Video Quality Metric|cgvqm]] — Intel Labs 全参考视频质量指标，针对渲染失真校准，配套 CGVQD 数据集
+- [[A LoD of Gaussians|a-lod-of-gaussians]] — 消费级 GPU 城市级 3DGS 无分块训练：核外存储 + HSPT + 流式渲染
 - [[Adaptive Shells|adaptive-shells]] — 自适应窄带渲染加速 NeRF（空间变化核+显式壳提取+窄带采样）
 - [[AMD FidelityFX Super Resolution (FSR 1.0)|fidelityfx-fsr-1]] — 代码分析
 - [[Arm Neural Super Sampling (NSS)|arm-neural-super-sampling]] — ARM 神经网络超采样项目（页面返回 404）
@@ -22,17 +21,22 @@ last_updated: "2026-07-30"
 - [[Extracting Neural Materials from Multi-view Images|extracting-neural-materials-from-multi-view-images]] — 神经材质提取管线
 - [[GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction|gs-2m]] — 材料感知联合优化，PBR + 多视角粗糙度监督实现反射表面高质量网格重建
 - [[NeuMatEx: Extracting Neural Materials from Multi-view Images|neumatex]] — 首个性从多视角图像提取神经材质的方法，LMRM + 不确定性引导 TTO
+- [[Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction|neural-harmonic-textures]] — 基元绑定谐波特征 + 延迟着色 MLP，提升 3DGS 单基元表达力，新视角合成 SOTA
 - [[Proxy-GS|proxy-gs]] — 利用代理网格的统一遮挡先验加速结构化3DGS训练与推理
 - [[Rectified Flow|rectified-flow]] — Rectified Flow：学习直线轨迹 ODE 实现快速生成和传输
 - [[Ref-DGS: Reflective Dual Gaussian Splatting|ref-dgs]] — 双高斯解耦的近场镜面反射建模，表面重建+新视角合成 SOTA
+- [[SDFRaster|sdfraster]] — 可光栅化 SDF 端到端网格重建：Delaunay 四面体化 + 可微 Marching Tetrahedra
 - [[Snapdragon Game Super Resolution (SGSR)|snapdragon-gsr]] — 代码分析
 - [[Spherical Voronoi Directional Appearance|spherical-voronoi-directional-appearance]] — 基于可微分 Spherical Voronoi 划分的 3DGS 外观建模，统一了辐射度和反射表示
 - [[Surflo|surflo]] — 全局 latent + 流匹配实现前馈式任意密度 3D 表面重建，从无位姿多视图直接生成定向点云和网格
 - [[TopoMesh: High-Fidelity Mesh Autoencoding via Topological Unification|topomesh]] — 拓扑统一框架实现显式网格级 VAE 监督，锐边 F1 提升超 8%
 - [[Toward Richer Material Generation via Procedural Data Enhancement|toward-richer-material-generation-via-procedural-data-enhancement]] — 简单 PBR 自动提升为多层 BRDF + 神经材质 + 视频扩散生成，CLIP-FID 3.907
 - [[TransGI: Real-Time Dynamic Global Illumination With Object-Centric Neural Transfer Model|transgi]] — 以物体为中心的神经迁移模型实现实时动态全局光照，支持光泽材质和物体变换
+- [[TransparentGS: Fast Inverse Rendering of Transparent Objects with Gaussians|transparent-gs-fast-inverse-rendering-of-transparent-objects-with-gaussians]] — 3D-GS 透明物体逆向渲染：透明高斯基元 + 延迟折射 + 高斯光场探针
 - [[Volumetric Surfaces|volumetric-surfaces]] — k-SDF 多层网格表示的模糊几何实时视图合成，移动端 42 FPS
 
 ### 其他源
 
+- [[CGVQM: Computer Graphics Video Quality Metric|cgvqm]] — Intel Labs 全参考视频质量指标，针对渲染失真校准，配套 CGVQD 数据集
+- [[RaDe-GS: Rasterizing Depth in Gaussian Splatting|ra-de-gs]] — 在 3D-GS 上栅格化深度与法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟
 - [[World Tracing|world-tracing-generative-pixel-aligned-geometry-beyond-the-visible]] — 像素对齐多层几何扩散，单图生成完整3D场景（可见+遮挡），SOTA 几何 F1

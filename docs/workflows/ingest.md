@@ -126,21 +126,47 @@ Wiki 页面的 `## 原始出处` 章节必须包含：
 - 包含 Related Work Analysis 章节
 - Method 章节双重写作：整体思路（直白解释设计动机）+ 复现细节（公式、超参数）
 
-## Phase1/Phase2 两阶段协议
+## LLM 调用模式
 
-`ingest.py` 的 LLM 调用自动转为两阶段协议，避免主 agent 处理大 prompt：
+`ingest.py` 支持三种 LLM 调用模式，按场景切换：
 
-1. **Phase1（`--phase1`）**：脚本构建 prompt，写入 `raw/.tmp/wiki-tasks/<task>.json`，立即返回。不会修改 wiki。
-2. **子代理处理**：主 agent 检测到 task 文件后 spawn 子代理读取 prompt、执行 LLM 推理，结果写入 `raw/.tmp/wiki-results/<task>.json` + `.done` 标记。
-3. **Phase2（`--phase2`）**：脚本读取子代理结果，解析 JSON，创建/更新 wiki 页面、索引、日志。
+### 模式 1：Task 文件模式（`--phase1` / `--phase2`）
 
-**何时触发**：
+1. **Phase1**：脚本构建 prompt，写入 `raw/.tmp/wiki-tasks/<task>.json`
+2. **主代理处理**：主 agent 读取 prompt 文件，执行 LLM 推理，结果写入 `raw/.tmp/wiki-results/<task>.txt` + `.done` 标记
+3. **Phase2**：脚本读取结果，解析 JSON，创建/更新 wiki 页面
 
-- `ingest.py --from-digest` 自动进入 `--phase1` 模式
-- `ingest.py --from-digest --auto` 自动 phase1 → 等待子代理 → phase2（全自动）
-- `ingest.py <file>`（非 phase1）直接调用 LLM（如禁用则写 task 文件）
+```
+ingest.py --phase1     → 写 task 文件
+# agent 处理 task 文件
+ingest.py --phase2     → 读取结果，创建页面
+```
 
-**安全保证**：
+### 模式 2：直接 LLM 模式（`WIKI_LLM_DIRECT=1`）
+
+单次运行生成 prompt，agent 处理后再运行一次完成合入：
+
+```
+WIKI_LLM_DIRECT=1 ingest.py --from-digest
+# → 写 prompt 到 raw/.tmp/wiki-llm-prompt.md，打印指令
+# → agent 处理 prompt，写结果到 raw/.tmp/wiki-llm-response.md
+# → 重新运行相同命令（自动读取 response）
+```
+
+### 模式 3：内联模式（无特殊参数）
+
+脚本直接调用 `call_llm()`。当 `WIKI_LLM_DIRECT` 和 `--phase1` 均未设置时，按以下优先级：已存在 RESPONSE_FILE → 直接返回内容；否则写 task 文件。
+
+### 附加选项
+
+| 参数 | 说明 |
+|------|------|
+| `--retry-failed` | 重试结果为空或失败的 task |
+| `--clean` | 显式清除 task/result 文件（默认保留） |
+| `--keep-phase2-results` | 保留处理后的中间产物 |
+
+### 安全保证
+
 - Phase1 返回 `False`，`run_from_digest` 不会删除 brief 条目或源文件
 - 仅当 Phase2 成功写入 wiki 页面后才清理临时文件
 - 异常时（JSON 解析失败、文件写入失败）抛出异常，brief 条目保留

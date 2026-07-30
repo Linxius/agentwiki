@@ -49,7 +49,7 @@ def ensure_dir(path):
 
 def load_processed(source_name):
     if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
+        with open(STATE_FILE, encoding="utf-8") as f:
             all_state = json.load(f)
     else:
         all_state = {}
@@ -59,11 +59,11 @@ def load_processed(source_name):
 def save_processed(source_name, data):
     all_state = {}
     if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
+        with open(STATE_FILE, encoding="utf-8") as f:
             all_state = json.load(f)
     all_state[source_name] = data
     ensure_dir(STATE_FILE.parent)
-    with open(STATE_FILE, "w") as f:
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(all_state, f, indent=2, ensure_ascii=False)
 
 
@@ -234,7 +234,7 @@ def main():
         print("Create config.json at repo root with feeds.sources.")
         sys.exit(1)
 
-    with open(CONFIG_FILE) as f:
+    with open(CONFIG_FILE, encoding="utf-8") as f:
         config = json.load(f)
 
     sources = config.get("feeds", {}).get("sources", [])

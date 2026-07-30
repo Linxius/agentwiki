@@ -21,6 +21,9 @@
 | 直接合入 | `python tools/ingest.py --paper <url-or-id>` | 跳过全部流程，URL/ID 直入 wiki |
 | Phase 1 | `--phase1` | 写 prompt 到 `raw/.tmp/wiki-tasks/` |
 | Phase 2 | `--phase2` | 读子代理结果继续处理 |
+| 直接 LLM | `WIKI_LLM_DIRECT=1` | 写 prompt 到单文件，两步完成合入 |
+| 重试失败 | `--retry-failed` | 重试结果为空或失败的 task |
+| 清理 task | `--clean` | 显式清除 task/result 文件（默认保留） |
 
 ## Deep-read 专有模式
 

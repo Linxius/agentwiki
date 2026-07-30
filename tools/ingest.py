@@ -50,7 +50,7 @@ from _utils import (read_file, write_file, call_llm, sha256,
                     parse_json_from_response, inject_source_url,
                     extract_wikilinks, all_wiki_pages,
                     prepare_tasks, read_results, clean_task_dirs, TASK_DIR,
-                    rename_file_by_title)
+                    rename_file_by_title, PROMPT_FILE, RESPONSE_FILE)
 
 REPO_ROOT = Path(__file__).parent.parent
 WIKI_DIR = REPO_ROOT / "wiki"
@@ -285,6 +285,9 @@ def update_interests_from_ingest(created_entity_pages: list[dict], created_conce
 
     try:
         raw = call_llm(prompt, max_tokens=2048)
+        if not raw:
+            print("  ⚠️  Interest extraction: LLM 返回空（phase1 模式），跳过")
+            return
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
         raw = re.sub(r"\s*```$", "", raw.strip())
         data = json.loads(raw)
@@ -853,20 +856,27 @@ def ingest(source_path: str, auto_convert: bool = True,
         results_map = read_results()
         raw = results_map.get(task_id, "")
         if not raw:
-            print(f"Error: no result found for {task_id}")
-            sys.exit(1)
+            print(f"  ⚠️  无 phase2 结果: {task_id}（需先运行子代理处理 task 文件）")
+            return False
     else:
         raw = call_llm(prompt, max_tokens=8192)
         if not raw:
-            return False  # phase1 auto-mode, not committed
+            print(f"  ⚠️  LLM 返回空 — 未能创建 wiki 页面「{source.stem}」")
+            if os.environ.get("WIKI_LLM_DIRECT") == "1":
+                print(f"     prompt 已写入 {PROMPT_FILE}")
+                print(f"     将响应写入 {RESPONSE_FILE} 后重新运行此命令即可")
+            elif "--phase1" not in sys.argv:
+                print(f"     提示：使用 --phase1 进入 task 文件模式，或用 WIKI_LLM_DIRECT=1 直接模式")
+            return False
 
     try:
         data = parse_json_from_response(raw)
     except (ValueError, json.JSONDecodeError) as e:
-        print(f"Error parsing API response: {e}")
-        print("Raw response saved to /tmp/ingest_debug.txt")
-        Path("/tmp/ingest_debug.txt").write_text(raw)
-        sys.exit(1)
+        print(f"  ⚠️  解析 API 响应失败: {e}（来源: {source.name})")
+        tmp_debug = Path("/tmp/ingest_debug.txt")
+        tmp_debug.write_text(raw, encoding="utf-8")
+        print(f"  Debug 数据已保存到 {tmp_debug}")
+        return False
 
     # Write source page
     slug = data["slug"]
@@ -1080,6 +1090,50 @@ def _remove_entry_from_brief(title: str, brief_date: str | None):
     print(f"  Removed entry: {title}")
 
 
+def _remove_dismissed_entries(content: str, brief_file: Path) -> int:
+    """Remove all entries marked [x] 不处理 from brief content.
+    
+    Returns count of removed entries. Modifies brief_file in place.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from brief import remove_entry, parse_entries, _empty_brief
+    
+    lines = content.split('\n')
+    removed = 0
+    i = 0
+    while i < len(lines):
+        if (lines[i].startswith('#### ') or lines[i].startswith('### ')) and not lines[i].startswith('### ['):
+            entry_lines = []
+            next_i = i + 1
+            while next_i < len(lines) and not re.match(r'^#{2,4} ', lines[next_i]):
+                entry_lines.append(lines[next_i])
+                next_i += 1
+            entry_text = '\n'.join(entry_lines)
+            if re.search(r'\[x\]\s*不处理|\[X\]\s*不处理', entry_text):
+                title = lines[i].lstrip('#').strip()
+                content = remove_entry(content, title)
+                removed += 1
+                # Re-parse from start since lines shifted
+                lines = content.split('\n')
+                i = 0
+                continue
+            i = next_i
+        else:
+            i += 1
+    
+    if removed > 0:
+        # Check if brief is now empty
+        if not parse_entries(content):
+            from datetime import date as _date
+            bd_match = re.search(r'(\d{4}-\d{2}-\d{2})', content[:200])
+            bd = bd_match.group(1) if bd_match else _date.today().isoformat()
+            content = _empty_brief(bd)
+        brief_file.write_text(content, encoding="utf-8")
+    
+    return removed
+
+
 def run_from_digest(date_str: str = None, auto_yes: bool = False):
     """Process files from digest/YYYY-MM-DD/brief.md marked for wiki ingest.
     
@@ -1099,6 +1153,12 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
         return
     
     brief_content = read_file(brief_file)
+    
+    # ── Cleanup: remove entries marked [x] 不处理 ──
+    dismissed_count = _remove_dismissed_entries(brief_content, brief_file)
+    if dismissed_count > 0:
+        print(f"  [清除] 已移除 {dismissed_count} 条「不处理」条目")
+        brief_content = read_file(brief_file)  # re-read after cleanup
     
     # Detect brief date from header (e.g. "# 资讯简报  YYYY-MM-DD")
     brief_date_match = re.search(r'#\s+资讯简报\s+(\d{4}-\d{2}-\d{2})', brief_content[:200])
@@ -1142,9 +1202,28 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
     # Resolve file paths — search across all date dirs in sources/
     sources_base = digest_dir / "sources"
     for entry in entries:
+        title = entry.get('title', '')
         source_file = entry.get('source_file', '')
+        
+        # If no source_file field, derive from source_url (e.g. arxiv ID)
         if not source_file:
-            continue
+            source_url = entry.get('source_url', '')
+            arxiv_id = extract_arxiv_id(source_url) if source_url else None
+            if arxiv_id:
+                source_file = f"raw/digest/sources/{brief_date or 'unknown'}/arxiv-{arxiv_id}.md"
+                entry['source_file'] = source_file
+                print(f"  [i] {title[:50]} — 无源文件字段，基于 arxiv ID 推测: {source_file}")
+            elif source_url:
+                # Non-arxiv: use a slug from URL
+                import re as _re
+                slug = _re.sub(r'[^a-zA-Z0-9]', '-', source_url.split('/')[-1] or 'source').strip('-')[:60]
+                source_file = f"raw/digest/sources/{brief_date or 'unknown'}/{slug}.md"
+                entry['source_file'] = source_file
+                print(f"  [i] {title[:50]} — 无源文件字段，基于 URL 推测: {source_file}")
+            else:
+                print(f"  [!] {title[:50]} — 无源文件字段且无 URL，跳过")
+                continue
+        
         candidate = Path(source_file)
         if candidate.exists():
             entry['file_path'] = candidate
@@ -1167,30 +1246,36 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             if "--no-auto-fetch" not in sys.argv:
                 source_url = entry.get('source_url', '')
                 if not source_url:
+                    print(f"  [!] {title[:50]} — 文件不存在且无 URL，跳过")
                     continue
                 arxiv_id = extract_arxiv_id(source_url) if source_url else None
                 src_dir = sources_base / (brief_date or "unknown")
                 src_dir.mkdir(parents=True, exist_ok=True)
                 out_path = src_dir / candidate.name
                 if arxiv_id:
-                    print(f"  [↓] 源文件缺失，自动下载 arxiv: {arxiv_id}")
+                    print(f"  [↓] {title[:50]} — 源文件缺失，自动下载 arxiv: {arxiv_id}")
                     try:
                         from _utils import safe_download_arxiv
                         safe_download_arxiv(arxiv_id, out_path)
-                        entry['file_path'] = out_path
-                        entry['current_path'] = str(out_path.relative_to(REPO_ROOT))
-                        print(f"  [OK] 已下载: {out_path}")
+                        # Validate file is non-empty
+                        if out_path.exists() and out_path.stat().st_size > 100:
+                            entry['file_path'] = out_path
+                            entry['current_path'] = str(out_path.relative_to(REPO_ROOT))
+                            print(f"  [OK] 已下载 ({out_path.stat().st_size} bytes): {out_path}")
+                        else:
+                            print(f"  [!] arxiv 下载文件为空或过小 ({out_path.stat().st_size} bytes)，跳过")
+                            out_path.unlink(missing_ok=True)
                     except RuntimeError as e:
                         print(f"  [!] arxiv 自动下载失败: {e}")
                 else:
                     # ── Non-arxiv URL: try web fetch ──
-                    print(f"  [↓] 源文件缺失，尝试网页抓取: {source_url}")
+                    print(f"  [↓] {title[:50]} — 源文件缺失，尝试网页抓取: {source_url}")
                     try:
                         from _utils import fetch_web_source
                         if fetch_web_source(source_url, out_path):
                             entry['file_path'] = out_path
                             entry['current_path'] = str(out_path.relative_to(REPO_ROOT))
-                            print(f"  [OK] 已下载网页源: {out_path}")
+                            print(f"  [OK] 已下载网页源 ({out_path.stat().st_size} bytes): {out_path}")
                         else:
                             print(f"  [!] 网页抓取失败: {source_url}")
                     except Exception as e:
@@ -1216,10 +1301,6 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             e['category'] = cat
 
     # ── Ingest ──
-    
-    # run_from_digest always uses --phase1 workflow (direct LLM calls are deprecated)
-    if '--phase1' not in sys.argv:
-        sys.argv.append('--phase1')
     
     for group in merged_groups:
         if len(group) > 1:
@@ -1265,24 +1346,62 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                     # Remove all merged entries from brief.md
                     for e in group:
                         _remove_entry_from_brief(e.get('title', '').strip(), brief_date)
+                else:
+                    print(f"  [!] 合入失败: {group[0].get('title', '')[:50]}")
+                    if "--phase1" in sys.argv:
+                        print(f"      处于 phase1 模式，需子代理处理 task 文件后执行 --phase2")
 
         else:
             # ── Single entry ──
                 entry = group[0]
                 file_path = entry['file_path']
                 
+                # ── Validate source file before copy ──
+                if not file_path.exists() or (file_path.is_file() and file_path.stat().st_size < 100):
+                    # Try re-download if it's an arxiv paper
+                    source_url = entry.get('source_url', '')
+                    arxiv_id = extract_arxiv_id(source_url) if source_url else None
+                    if arxiv_id:
+                        print(f"  [↓] 源文件无效，重新下载 arxiv: {arxiv_id}")
+                        from _utils import safe_download_arxiv
+                        try:
+                            safe_download_arxiv(arxiv_id, file_path)
+                            if file_path.exists() and file_path.stat().st_size > 100:
+                                print(f"  [OK] 重新下载成功 ({file_path.stat().st_size} bytes)")
+                            else:
+                                print(f"  [!] 重新下载仍无效，跳过")
+                                continue
+                        except Exception as e:
+                            print(f"  [!] 重新下载失败: {e}")
+                            continue
+                    else:
+                        print(f"  [!] 源文件 {file_path} 无效且无法重新下载，跳过")
+                        continue
+                
                 category = entry.get('category', 'papers')
                 dest_dir = REPO_ROOT / "raw" / category
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_path = dest_dir / file_path.name
                 
-                if dest_path.exists():
+                # Skip only if wiki source page already exists (not just raw/ copy)
+                source_url = entry.get('source_url', '')
+                arxiv_id = extract_arxiv_id(source_url) if source_url else None
+                wiki_sources = REPO_ROOT / "wiki" / "sources"
+                already_in_wiki = False
+                if arxiv_id and wiki_sources.exists():
+                    for wp in wiki_sources.glob("*.md"):
+                        if arxiv_id in wp.read_text(encoding="utf-8", errors="replace"):
+                            already_in_wiki = True
+                            break
+                if already_in_wiki:
+                    print(f"  [已合入] {entry.get('title', '')[:50]} — wiki/sources/ 已含 arxiv:{arxiv_id}")
                     continue
                 
-                shutil.copy2(str(file_path), str(dest_path))
-                
-                if entry.get('source_url'):
-                    inject_source_url(dest_path, entry['source_url'])
+                # Copy source to raw/category/ if not already there
+                if not dest_path.exists():
+                    shutil.copy2(str(file_path), str(dest_path))
+                    if entry.get('source_url'):
+                        inject_source_url(dest_path, entry['source_url'])
                 
                 # Collect comments and deepdive reference
                 comments = entry.get('comments', '')
@@ -1300,15 +1419,22 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                         file_path.unlink()
                         # Remove entry from brief.md immediately (per-entry granularity)
                         _remove_entry_from_brief(entry.get('title', '').strip(), brief_date)
+                    else:
+                        print(f"  [!] 合入失败: {entry.get('title', '')[:50]}")
+                        if "--phase1" in sys.argv:
+                            print(f"      处于 phase1 模式，需子代理处理 task 文件后执行 --phase2")
                 except Exception:
                     raise
 
-    # ── Auto mode: wait for subagents + run phase2 ──
-    if "--auto" in sys.argv:
-        from _utils import run_phase_auto
-        # Re-run without --auto, with --phase2
-        phase2_args = [a for a in sys.argv if a != "--auto"] + ["--phase2"]
-        run_phase_auto(phase2_args)
+    # ── Phase1 完成提示 ──
+    if "--phase1" in sys.argv or ("--auto" in sys.argv and "--phase2" not in sys.argv):
+        print(f"\n{'='*60}")
+        print(f"📋 Phase1 完成。可选处理方式：")
+        print(f"   A) Task 文件模式：读取 raw/.tmp/wiki-tasks/manifest.json，处理每个 task")
+        print(f"      完成后运行: python tools/ingest.py --from-digest --phase2")
+        print(f"   B) 直接 LLM 模式：WIKI_LLM_DIRECT=1 python tools/ingest.py --from-digest")
+        print(f"      处理 raw/.tmp/wiki-llm-prompt.md，写结果到 raw/.tmp/wiki-llm-response.md，重新运行")
+        print(f"{'='*60}\n")
 
 
 # ── arXiv patterns (shared with deep-read.py) ──
@@ -1583,9 +1709,8 @@ if __name__ == "__main__":
     auto_mode = "--auto" in sys.argv
     date_str = None
     
-    # Handle --auto: merge --phase1 behavior
-    if auto_mode and "--phase1" not in sys.argv:
-        sys.argv.append("--phase1")
+    # --auto 不再强制 --phase1：call_llm() 会自行判断模式
+    # 需要 phase1 模式时请显式传入 --phase1
     
     # Handle --paper mode
     if direct_paper:

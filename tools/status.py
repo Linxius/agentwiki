@@ -63,20 +63,92 @@ def check_inbox_files():
     return count
 
 
+def _extract_arxiv_id_from_url(url: str) -> str | None:
+    m = re.search(r'arxiv\.org/abs/(\d{4}\.\d{4,5})', url)
+    return m.group(1) if m else None
+
+
+def _count_already_ingested(entries: list[dict]) -> int:
+    """Count entries whose source URL already appears in wiki/sources/ pages."""
+    wiki_sources = Path(__file__).resolve().parent.parent / "wiki" / "sources"
+    if not wiki_sources.exists():
+        return 0
+    source_pages = list(wiki_sources.glob("*.md"))
+    if not source_pages:
+        return 0
+
+    ingested = 0
+    for entry in entries:
+        url = entry.get("source_url", "")
+        if not url:
+            continue
+        arxiv_id = _extract_arxiv_id_from_url(url)
+        if arxiv_id:
+            # Check if any wiki source page contains this arxiv ID
+            for page in source_pages:
+                content = page.read_text(encoding="utf-8", errors="replace")
+                if arxiv_id in content:
+                    ingested += 1
+                    break
+        else:
+            # Non-arxiv: check for the URL string
+            for page in source_pages:
+                content = page.read_text(encoding="utf-8", errors="replace")
+                if url in content:
+                    ingested += 1
+                    break
+    return ingested
+
+
+def _parse_brief_entries(content: str) -> list[dict]:
+    """Parse brief.md entries and return list of {title, source_url, check_type}."""
+    entries = []
+    lines = content.split('\n')
+    i = 0
+    while i < len(lines):
+        if (lines[i].startswith('#### ') or lines[i].startswith('### ')) and not lines[i].startswith('### ['):
+            entry_lines = []
+            next_i = i + 1
+            while next_i < len(lines) and not re.match(r'^#{2,4} ', lines[next_i]):
+                entry_lines.append(lines[next_i])
+                next_i += 1
+
+            entry_text = '\n'.join(entry_lines)
+            title = lines[i].lstrip('#').strip()
+            source_url = ""
+            for el in entry_lines:
+                m = re.match(r'- 来源:\s*(.*)', el)
+                if m:
+                    source_url = m.group(1).strip()
+            has_ingest = bool(re.search(r'\[x\]\s*合入 wiki|\[X\]\s*合入 wiki', entry_text))
+            entries.append({"title": title, "source_url": source_url, "has_ingest": has_ingest})
+            i = next_i
+        else:
+            i += 1
+    return entries
+
+
 def check_brief():
-    """Return status info about brief.md."""
+    """Return status info about brief.md, cross-referencing with wiki/sources/."""
     content = read_file(BRIEF_FILE)
     if not content:
-        return {"exists": False, "has_content": False, "deep_read": 0, "ingest": 0}
+        return {"exists": False, "has_content": False, "deep_read": 0, "ingest": 0, "ingest_pending": 0}
 
     deep_read = len(re.findall(r'\[x\]\s*深度阅读|\[X\]\s*深度阅读', content))
     ingest = len(re.findall(r'\[x\]\s*合入 wiki|\[X\]\s*合入 wiki', content))
+
+    # Cross-reference: subtract entries already present in wiki/sources/
+    entries = _parse_brief_entries(content)
+    ingest_entries = [e for e in entries if e.get("has_ingest")]
+    already_done = _count_already_ingested(ingest_entries)
+    ingest_pending = max(0, ingest - already_done)
 
     return {
         "exists": True,
         "has_content": bool(content.strip()),
         "deep_read": deep_read,
         "ingest": ingest,
+        "ingest_pending": ingest_pending,
     }
 
 
@@ -126,7 +198,7 @@ def suggest_next(brief, inbox_links, inbox_files, feeds):
     if brief["deep_read"] > 0 and brief["deep_read"] > 0:
         steps.append("生成深度阅读")
 
-    if brief["ingest"] > 0:
+    if brief.get("ingest_pending", 0) > 0:
         steps.append("合入 wiki")
 
     now = datetime.now(timezone.utc)
@@ -177,8 +249,13 @@ def format_report(data):
     else:
         lines.append(f"3. brief: 未生成")
 
-    lines.append(f"4. deep-read: {b['deep_read']} checked")
-    lines.append(f"5. ingest: {b['ingest']} checked")
+    ingest_pending = b.get("ingest_pending", b["ingest"])
+    if ingest_pending < b["ingest"]:
+        lines.append(f"4. deep-read: {b['deep_read']} checked")
+        lines.append(f"5. ingest: {b['ingest']} checked（{ingest_pending} 待处理，{b['ingest'] - ingest_pending} 已合入）")
+    else:
+        lines.append(f"4. deep-read: {b['deep_read']} checked")
+        lines.append(f"5. ingest: {b['ingest']} checked")
 
     for f in data["feeds"]:
         name = f["name"]
@@ -209,7 +286,7 @@ def check_blockers(data):
         "inbox_files": inbox_files > 0,
         "inbox_links": inbox_links > 0,
         "brief_with_checked_deepread": brief["exists"] and brief["deep_read"] > 0,
-        "brief_with_checked_ingest": brief["exists"] and brief["ingest"] > 0,
+        "brief_with_checked_ingest": brief["exists"] and brief.get("ingest_pending", brief["ingest"]) > 0,
     }
 
     for step_id, step_label, prereqs in PIPELINE_STEPS:

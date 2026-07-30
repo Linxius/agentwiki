@@ -503,6 +503,16 @@ def generate_disinterest_suggestion(entry: dict) -> dict:
 
     try:
         raw = call_llm(prompt, max_tokens=1024)
+        if not raw:
+            print(f"  ⚠️ LLM 返回空（phase1 模式），跳过 disinterest 分析: {entry.get('title', '')[:50]}")
+            return {
+                'title': entry.get('title', ''),
+                'suggested_action': 'no_action',
+                'disinterest_name': '',
+                'disinterest_keywords': [],
+                'disinterest_description': '',
+                'reasoning': 'LLM 返回空（phase1 模式）',
+            }
         clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
         clean = re.sub(r"\s*```$", "", clean.strip())
         result = json.loads(clean)
