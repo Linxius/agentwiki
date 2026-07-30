@@ -12,6 +12,7 @@ last_updated: "2026-07-31"
 
 ### 论文
 
+- [[A Generalizable Light Transport 3D Embedding for Global Illumination|a-generalizable-light-transport-3d-embedding-for-global-illumination]] — 可泛化全局光照：点云 + 线性 Transformer + 局部解码，14k 室内场景基准
 - [[A LoD of Gaussians|a-lod-of-gaussians]] — 消费级 GPU 城市级 3DGS 无分块训练：核外存储 + HSPT + 流式渲染
 - [[Adaptive Shells|adaptive-shells]] — 自适应窄带渲染加速 NeRF（空间变化核+显式壳提取+窄带采样）
 - [[AMD FidelityFX Super Resolution (FSR 1.0)|fidelityfx-fsr-1]] — 代码分析
@@ -19,15 +20,21 @@ last_updated: "2026-07-31"
 - [[Arm Neural Technology for Mobile Games|arm-neural-technology-for-mobile-games]] — ARM 移动端神经网络技术官方文档（访问受限）
 - [[Bake It Till You Make It: Ultrafast Spatial Texture-Atlas Splatting|bake-it-till-you-make-it]] — 哈希网格烘焙为纹理图集，4K@60FPS 新视角合成
 - [[Extracting Neural Materials from Multi-view Images|extracting-neural-materials-from-multi-view-images]] — 神经材质提取管线
+- [[GLINT: Modeling Scene-Scale Transparency via Gaussian Radiance Transport|glint-modeling-scene-scale-transparency-via-gaussian-radiance-transport]] — 场景尺度透明度重建：分解高斯表示 + 混合光栅化/光线追踪，3D-FRONT-T 基准 SOTA
+- [[GlossyGS: Inverse Rendering of Glossy Objects with 3D Gaussian Splatting|glossygs-inverse-rendering-of-glossy-objects-with-3d-gaussian-splatting]] — 3D-GS 光泽物体逆渲染：法线图预滤波 + 微表面分割先验，实时 30 FPS 重光照
 - [[GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction|gs-2m]] — 材料感知联合优化，PBR + 多视角粗糙度监督实现反射表面高质量网格重建
+- [[Mobile-GS: Real-time Gaussian Splatting for Mobile Devices|mobilegs-real-time-gaussian-splatting-for-mobile-devices]] — 移动端 3DGS：无排序渲染 + 球谐蒸馏 + 神经量化 + 剪枝，骁龙 8 Gen 3 上 116 FPS
 - [[NeuMatEx: Extracting Neural Materials from Multi-view Images|neumatex]] — 首个性从多视角图像提取神经材质的方法，LMRM + 不确定性引导 TTO
 - [[Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction|neural-harmonic-textures]] — 基元绑定谐波特征 + 延迟着色 MLP，提升 3DGS 单基元表达力，新视角合成 SOTA
 - [[Proxy-GS|proxy-gs]] — 利用代理网格的统一遮挡先验加速结构化3DGS训练与推理
+- [[RadiosityGS: Differentiable Light Transport with Gaussian Surfels|radiositygs-differentiable-light-transport-with-gaussian-surfels]] — 高斯 surfels + 经典辐射度理论，可微光传输 + 数百 FPS 全局光照渲染
 - [[Rectified Flow|rectified-flow]] — Rectified Flow：学习直线轨迹 ODE 实现快速生成和传输
 - [[Ref-DGS: Reflective Dual Gaussian Splatting|ref-dgs]] — 双高斯解耦的近场镜面反射建模，表面重建+新视角合成 SOTA
+- [[Ref-GS: Directional Factorization for 2D Gaussian Splatting|ref-gs-directional-factorization-for-2d-gaussian-splatting]] — 反射场景 3DGS：Sph-Mip 编码 + 延迟渲染 + 方向分解，ShinySynthetic SOTA
 - [[SDFRaster|sdfraster]] — 可光栅化 SDF 端到端网格重建：Delaunay 四面体化 + 可微 Marching Tetrahedra
 - [[Snapdragon Game Super Resolution (SGSR)|snapdragon-gsr]] — 代码分析
 - [[Spherical Voronoi Directional Appearance|spherical-voronoi-directional-appearance]] — 基于可微分 Spherical Voronoi 划分的 3DGS 外观建模，统一了辐射度和反射表示
+- [[STREAM3D: Generating 3D Meshes from Videos|stream3d-generating-3d-meshes-from-videos]] — 视频到 mesh 生成：多视角一致性约束，直接从视频序列输出流形网格
 - [[Surflo|surflo]] — 全局 latent + 流匹配实现前馈式任意密度 3D 表面重建，从无位姿多视图直接生成定向点云和网格
 - [[TopoMesh: High-Fidelity Mesh Autoencoding via Topological Unification|topomesh]] — 拓扑统一框架实现显式网格级 VAE 监督，锐边 F1 提升超 8%
 - [[Toward Richer Material Generation via Procedural Data Enhancement|toward-richer-material-generation-via-procedural-data-enhancement]] — 简单 PBR 自动提升为多层 BRDF + 神经材质 + 视频扩散生成，CLIP-FID 3.907

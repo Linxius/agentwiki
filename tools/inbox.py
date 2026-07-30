@@ -602,6 +602,9 @@ def fetch_arxiv(arxiv_id: str, out_path: Path | None = None) -> str:
                     return content
         except Exception:
             pass
+        # Clean up CLI-created files (title-named .md) before fallback
+        for f in list(out_dir.glob("*.md")):
+            f.unlink(missing_ok=True)
         # Fallback to Python API if CLI fails
         return _fetch_arxiv_api(arxiv_id)
 

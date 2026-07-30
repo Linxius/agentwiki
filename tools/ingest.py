@@ -49,7 +49,7 @@ from datetime import date
 from _utils import (read_file, write_file, call_llm, sha256,
                     parse_json_from_response, inject_source_url,
                     extract_wikilinks, all_wiki_pages,
-                    prepare_tasks, read_results, clean_task_dirs, TASK_DIR,
+                    prepare_tasks, read_results, clean_task_dirs, TASK_DIR, RESULT_DIR,
                     rename_file_by_title, PROMPT_FILE, RESPONSE_FILE)
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -835,39 +835,25 @@ def ingest(source_path: str, auto_convert: bool = True,
         source_content_path=source_file_repo,
     )
 
-    # ── Phase 1: write prompt to file for subagent ──
-    if "--phase1" in sys.argv:
-        task_id = f"ingest_{source.stem}"
-        prepare_tasks([{
-            "id": task_id,
-            "prompt": prompt,
-            "max_tokens": 8192,
-            "metadata": {
-                "source_path": str(source.relative_to(REPO_ROOT)),
-                "tmp_img_dir": str(tmp_img_dir) if tmp_img_dir else "",
-                "today": today,
-            },
-        }])
-        return False  # task queued, not committed yet
+    # ── Resolve task ID from source stem ──
+    task_id = f"ingest_{source.stem}"
 
     # ── Phase 2: read result from subagent ──
     if "--phase2" in sys.argv:
-        task_id = f"ingest_{source.stem}"
         results_map = read_results()
         raw = results_map.get(task_id, "")
+        if not raw:
+            # Fallback: try auto_<hash> ID (legacy tasks from before the fix)
+            import hashlib as _hl
+            legacy_id = f"auto_{_hl.md5(prompt.encode()).hexdigest()[:12]}"
+            raw = results_map.get(legacy_id, "")
         if not raw:
             print(f"  ⚠️  无 phase2 结果: {task_id}（需先运行子代理处理 task 文件）")
             return False
     else:
-        raw = call_llm(prompt, max_tokens=8192)
-        if not raw:
-            print(f"  ⚠️  LLM 返回空 — 未能创建 wiki 页面「{source.stem}」")
-            if os.environ.get("WIKI_LLM_DIRECT") == "1":
-                print(f"     prompt 已写入 {PROMPT_FILE}")
-                print(f"     将响应写入 {RESPONSE_FILE} 后重新运行此命令即可")
-            elif "--phase1" not in sys.argv:
-                print(f"     提示：使用 --phase1 进入 task 文件模式，或用 WIKI_LLM_DIRECT=1 直接模式")
-            return False
+        # Default / --phase1 / WIKI_LLM_DIRECT mode: write task for subagent processing
+        call_llm(prompt, max_tokens=8192, task_id=task_id)
+        return False  # task queued, not committed yet
 
     try:
         data = parse_json_from_response(raw)
@@ -1070,8 +1056,44 @@ def _combine_source_files(file_paths: list[Path]) -> Path | None:
     return temp
 
 
+def _extract_entry_for_archive(content: str, title: str) -> tuple[str | None, str | None]:
+    """Find entry by title in brief content and return (entry_text, source_date).
+
+    source_date is extracted from the `- 源文件:` field pattern `sources/YYYY-MM-DD/`.
+    Returns (None, None) if entry not found.
+    """
+    _lines = content.split('\n')
+    _header_re = re.compile(r'^#{3,4} ')
+    _source_re = re.compile(r'sources/(\d{4}-\d{2}-\d{2})/')
+    i = 0
+    while i < len(_lines):
+        if _header_re.match(_lines[i]) and not _lines[i].lstrip().startswith('### ['):
+            _start = i
+            i += 1
+            while i < len(_lines) and not _header_re.match(_lines[i]):
+                i += 1
+            _end = i
+            _header_text = _lines[_start].lstrip('#').strip()
+            if title in _header_text:
+                _chunk = '\n'.join(_lines[_start:_end])
+                _date = None
+                for _j in range(_start, _end):
+                    _m = _source_re.search(_lines[_j])
+                    if _m:
+                        _date = _m.group(1)
+                        break
+                return _chunk, _date
+        else:
+            i += 1
+    return None, None
+
+
 def _remove_entry_from_brief(title: str, brief_date: str | None):
-    """Remove a single entry from brief.md by title. If brief becomes empty, set '暂无待处理' state."""
+    """Remove a single entry from brief.md by title, archiving it first.
+
+    Archive to raw/digest/brief/YYYY-MM-DD.md before removal, then
+    delete from brief.md. If brief becomes empty, set '暂无待处理' state.
+    """
     if not title:
         return
     _brief_file = REPO_ROOT / "raw" / "digest" / "brief.md"
@@ -1079,9 +1101,29 @@ def _remove_entry_from_brief(title: str, brief_date: str | None):
         return
     import sys as _sys
     _sys.path.insert(0, str(REPO_ROOT / "tools"))
-    from brief import remove_entry, parse_entries, _empty_brief
+    from brief import remove_entry, parse_entries, _empty_brief, run_archive
     from datetime import date as _date
+
+    # ── Phase 1: let run_archive handle entries with source dates ──
+    if brief_date:
+        run_archive(force_date=brief_date)
+
     _content = _brief_file.read_text(encoding="utf-8")
+
+    # ── Phase 2: find entry by title, extract archive date, write to archive ──
+    _entry_chunk, _entry_date = _extract_entry_for_archive(_content, title)
+    if _entry_chunk:
+        _arc_date = _entry_date or brief_date or _date.today().isoformat()
+        _arc_path = REPO_ROOT / "raw" / "digest" / "brief" / f"{_arc_date}.md"
+        if _arc_path.exists():
+            _existing = _arc_path.read_text(encoding="utf-8")
+            _combined = _existing.rstrip() + '\n\n---\n\n' + _entry_chunk + '\n'
+        else:
+            _combined = _entry_chunk + '\n'
+        _arc_path.write_text(_combined, encoding="utf-8")
+        print(f"  📦 brief/{_arc_date}.md  ← {title[:50]}")
+
+    # ── Phase 3: remove entry from brief.md ──
     _content = remove_entry(_content, title)
     if not parse_entries(_content):
         bd = brief_date or _date.today().isoformat()
@@ -1142,8 +1184,11 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
     3. Move files to appropriate category directory
     4. Call ingest() for each file (merged groups → single ingest)
     """
+    import os as _os
     from datetime import date as _date
     today_str = _date.today().isoformat()
+    # Use direct LLM mode (single prompt/response file) instead of task files
+    _os.environ["WIKI_LLM_DIRECT"] = "1"
     
     digest_dir = REPO_ROOT / "raw" / "digest"
     brief_file = digest_dir / "brief.md"
@@ -1153,6 +1198,13 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
         return
     
     brief_content = read_file(brief_file)
+    
+    # ── Cleanup stale task files (from previous runs) ──
+    from _utils import TASK_DIR as _TD, RESULT_DIR as _RD
+    if _TD.exists():
+        shutil.rmtree(str(_TD))
+    if _RD.exists():
+        shutil.rmtree(str(_RD))
     
     # ── Cleanup: remove entries marked [x] 不处理 ──
     dismissed_count = _remove_dismissed_entries(brief_content, brief_file)
@@ -1241,6 +1293,23 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
             if found:
                 entry['file_path'] = found
                 entry['current_path'] = str(found.relative_to(REPO_ROOT))
+        # Fallback: search by arxiv ID (match both naming conventions)
+        if not entry.get('file_path'):
+            source_url = entry.get('source_url', '')
+            arxiv_id = extract_arxiv_id(source_url) if source_url else None
+            if arxiv_id:
+                id_flat = arxiv_id.replace('.', '')
+                for d in sorted(sources_base.iterdir()):
+                    if not d.is_dir():
+                        continue
+                    for f in d.iterdir():
+                        if f.name.startswith(f"arxiv-{id_flat}") and f.suffix == ".md":
+                            entry['file_path'] = f
+                            entry['current_path'] = str(f.relative_to(REPO_ROOT))
+                            print(f"  [i] {title[:50]} — 按 arxiv ID 匹配: {entry['current_path']}")
+                            break
+                    if entry.get('file_path'):
+                        break
         if not entry.get('file_path'):
             # ── Auto-fetch missing source (unless --no-auto-fetch) ──
             if "--no-auto-fetch" not in sys.argv:
@@ -1347,9 +1416,7 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                     for e in group:
                         _remove_entry_from_brief(e.get('title', '').strip(), brief_date)
                 else:
-                    print(f"  [!] 合入失败: {group[0].get('title', '')[:50]}")
-                    if "--phase1" in sys.argv:
-                        print(f"      处于 phase1 模式，需子代理处理 task 文件后执行 --phase2")
+                    print(f"  [📝] 任务已排队: {group[0].get('title', '')[:50]}")
 
         else:
             # ── Single entry ──
@@ -1420,20 +1487,19 @@ def run_from_digest(date_str: str = None, auto_yes: bool = False):
                         # Remove entry from brief.md immediately (per-entry granularity)
                         _remove_entry_from_brief(entry.get('title', '').strip(), brief_date)
                     else:
-                        print(f"  [!] 合入失败: {entry.get('title', '')[:50]}")
-                        if "--phase1" in sys.argv:
-                            print(f"      处于 phase1 模式，需子代理处理 task 文件后执行 --phase2")
+                        print(f"  [📝] 任务已排队: {entry.get('title', '')[:50]}")
                 except Exception:
                     raise
 
-    # ── Phase1 完成提示 ──
-    if "--phase1" in sys.argv or ("--auto" in sys.argv and "--phase2" not in sys.argv):
+    # ── Prompt file hint for agent (only when tasks queued) ──
+    from _utils import PROMPT_FILE, RESPONSE_FILE
+    if PROMPT_FILE.exists():
         print(f"\n{'='*60}")
-        print(f"📋 Phase1 完成。可选处理方式：")
-        print(f"   A) Task 文件模式：读取 raw/.tmp/wiki-tasks/manifest.json，处理每个 task")
-        print(f"      完成后运行: python tools/ingest.py --from-digest --phase2")
-        print(f"   B) 直接 LLM 模式：WIKI_LLM_DIRECT=1 python tools/ingest.py --from-digest")
-        print(f"      处理 raw/.tmp/wiki-llm-prompt.md，写结果到 raw/.tmp/wiki-llm-response.md，重新运行")
+        print(f"📋 Prompt 已写入: {PROMPT_FILE}")
+        print(f"   处理步骤：")
+        print(f"   1. 读取 {PROMPT_FILE}")
+        print(f"   2. 处理请求并将结果写入 {RESPONSE_FILE}")
+        print(f"   3. 重新运行当前命令以读取结果并完成合入")
         print(f"{'='*60}\n")
 
 

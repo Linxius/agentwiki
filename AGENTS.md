@@ -32,27 +32,39 @@ This wiki is maintained entirely by your coding agent. No API key needed — jus
 | `read code` / `代码阅读` | 子代理驱动代码分析 | [code-read.md](docs/workflows/code-read.md) |
 | `status` / `流程状态` | 检查各节点进度并建议下一步 | — |
 | `fetch sources` / `抓取源文件` | 抓取 brief 中缺失的源文件 | — |
-| `fetch alphaxiv` / `补充 alphaXiv` | 用 MCP 获取下载失败的论文全文 | 见下方 #arXiv 下载失败自动处理 |
+| `fetch alphaxiv` / `补充 alphaXiv` | 用 alphaXiv HTTP overview / MCP 获取下载失败的论文全文 | 见下方 #arXiv 下载失败自动处理 |
 
 Agent 主动提醒（完整列表见 `triggers.md` #Agent 主动提醒）：inbox 待处理、filter 待执行、deep-read 待生成、ingest 待合入、feeds 过期、源文件缺失、arxiv 下载失败需 alphaXiv 补充。
 
-## arXiv 下载失败自动处理
+## arXiv 下载自动处理（`safe_download_arxiv()`）
 
-`inbox.py` 的 arxiv2md / alphaXiv HTTP overview 均失败时，会在源文件中写入以下标记：
+`safe_download_arxiv()`（`_utils.py`）是 inbox.py 和 ingest.py 共用下载函数，回退链自底向上：
+
+```
+arxiv2md CLI → arxiv2md API → ❌ 全失败 → agent_action 标记 → agent MCP 补全
+```
+
+- 每一级内容 <5000 bytes 或 arxiv ID 不匹配时自动跳下一级
+- 全部 arxiv2md 均失败时写入 `agent_action: fetch_alphaxiv` 标记：
 
 ```yaml
 agent_action: fetch_alphaxiv
-agent_note: "内容过短 (113 bytes, 阈值 5000)"
+agent_note: "arxiv2md CLI/API 均失败，需要 agent 通过 alphaXiv HTTP overview 获取，否则 MCP fullText"
 ```
 
-### Agent 操作步骤
+### Agent MCP 补全步骤
 
-1. `grep -r "agent_action: fetch_alphaxiv" raw/inbox/` 扫描待处理文件
-2. 对每个文件，提取 arxiv ID，调用 `alphaxiv_get_paper_content`：
+1. `grep -r "agent_action: fetch_alphaxiv" raw/inbox/ raw/papers/ raw/digest/` 扫描待处理文件
+2. 提取 arxiv ID，先尝试 alphaXiv HTTP overview：
+   ```
+   https://www.alphaxiv.org/overview/{id}.md
+   ```
+   webfetch 后内容 >5000 bytes 即可用。用 YAML frontmatter 包裹后写回原文件（`source: "alphaxiv overview"`），删除 `agent_action`/`agent_note` 行。
+3. 如果 overview 失败或内容不足，调用 MCP `alphaxiv_get_paper_content`：
    ```
    alphaxiv_get_paper_content(url="https://arxiv.org/abs/{id}", fullText=true)
    ```
-3. 将返回的完整论文内容用 YAML frontmatter 包裹后写回原文件：
+   返回内容用 YAML frontmatter 包裹写回：
    ```
    ---
    title: "论文标题（从返回内容第一行 # 提取）"
@@ -62,13 +74,13 @@ agent_note: "内容过短 (113 bytes, 阈值 5000)"
    
    {完整论文内容}
    ```
-4. 删除该文件的 YAML 中 `agent_action`/`agent_note` 行
-5. 如果 MCP fullText 也失败，fallback 到 alphaXiv HTTP overview：
+   删除 `agent_action`/`agent_note` 行。
+4. 如果 MCP fullText 也失败，fallback 到 arxiv HTML5：
    ```
-   https://www.alphaxiv.org/overview/{id}.md
+   https://arxiv.org/html/{id}
    ```
-   同样用 YAML frontmatter 包裹后写回（`source: "alphaxiv overview"`）
-6. 之后 `filter` 正常处理该文件
+   webfetch 后用 trafilatura 提取，写回（`source: "arxiv html5"`）
+5. 之后 `filter` 正常处理该文件
 
 ## 流程优化
 

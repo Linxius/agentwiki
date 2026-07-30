@@ -5,7 +5,7 @@ Triggered by: *"ingest <file>"*
 **Supported formats:** Markdown (`.md`) is ingested directly. Non-markdown files (`.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) are auto-converted to markdown via [markitdown](https://github.com/microsoft/markitdown) before ingestion. **arXiv 论文优先用 `arxiv2md`（解析 HTML，保留公式和结构）**，PDF 文件用 `tools/pdf2md.py`。Use `--no-convert` to skip auto-conversion.
 
 Steps (in order):
-1. **arXiv 论文** — `arxiv2md <arxiv_id> -o <output.md>`（推荐，解析 HTML 版本，保留 MathML/公式）。若失败则 fallback 到 `tools/pdf2md.py`。
+1. **arXiv 论文** — `arxiv2md <arxiv_id> -o <output.md>`（推荐，解析 HTML 版本，保留 MathML/公式）。自动经 multi-tier 回退链：arxiv2md CLI/API → alphaXiv overview → arxiv HTML5 → abstract webfetch，全部失败时标记 `agent_action: fetch_alphaxiv` 待 MCP 补全。
 2. **PDF** — `tools/pdf2md.py <path>` (timeout ≥600s). Read `.md` output.
 2. **Book splitting** — dir: use chapter files. Single file: split by `##` into `raw/books/<slug>/*.md`.
 3. Extract original URL from frontmatter/arXiv ID/content — if none, ask user.

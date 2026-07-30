@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-pipeline — run feeds → inbox → filter in sequence.
+pipeline — run inbox → filter in sequence.
 
 Usage:
     python tools/pipeline.py                  # full pipeline
-    python tools/pipeline.py --no-feeds       # skip feeds pull
     python tools/pipeline.py --no-inbox       # skip inbox processing
     python tools/pipeline.py --no-filter      # skip filtering
     python tools/pipeline.py --dry-run        # show steps without running
@@ -20,7 +19,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 
 STEPS = [
-    ("feeds",  "tools/feeds.py",     "拉取 feeds"),
     ("inbox",  "tools/inbox.py",     "处理 inbox"),
     ("filter", "tools/filter.py",    "筛选分类"),
 ]
@@ -53,7 +51,6 @@ def run_step(name: str, script: str, label: str, dry_run: bool = False,
 
 def main():
     parser = argparse.ArgumentParser(description="Run feeds → inbox → filter pipeline")
-    parser.add_argument("--no-feeds", action="store_true", help="Skip feeds pull")
     parser.add_argument("--no-inbox", action="store_true", help="Skip inbox processing")
     parser.add_argument("--no-filter", action="store_true", help="Skip filter")
     parser.add_argument("--dry-run", action="store_true", help="Show steps without running")
@@ -62,14 +59,12 @@ def main():
     args = parser.parse_args()
 
     skip = set()
-    if args.no_feeds:
-        skip.add("feeds")
     if args.no_inbox:
         skip.add("inbox")
     if args.no_filter:
         skip.add("filter")
 
-    print("Pipeline: feeds → inbox → filter")
+    print("Pipeline: inbox → filter")
     if args.dry_run:
         print("Mode: dry-run\n")
     elif args.phase1:

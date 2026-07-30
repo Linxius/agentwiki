@@ -284,3 +284,53 @@ ENCODING_ARGS = dict(encoding='utf-8', errors='replace')
 check = subprocess.run(..., **ENCODING_ARGS)
 # 同时 fix.stdout → (fix.stdout or "").strip()
 ```
+
+---
+
+## [2026-07-31] ingest 回退链 & ID 校验强化
+
+涉及文件：`_utils.py`
+
+### P0: arxiv2md ID 校验后不阻止错误内容写入
+
+**触发场景**：`safe_download_arxiv()` CLI 模式已校验 arxiv ID 一致性并打印警告，但 ID 不匹配时仍接受内容并返回。本次 ingest 中 5/7 篇因此全是 Mobile-GS 的同一内容写入不同文件名。
+
+**修复**：`_utils.py` `safe_download_arxiv()` — CLI 模式验证 ID 不匹配时 `out_path.unlink()` + `generated.unlink()` 清理错误文件，不 `return content`，自然进入下一个回退：
+
+```python
+actual_id = _extract_arxiv_id_from_content(content)
+if actual_id and actual_id != arxiv_id:
+    print(f"⚠️ arxiv ID 不匹配：期望 {arxiv_id}，实际 {actual_id}，走下一个回退")
+    out_path.unlink(missing_ok=True)
+    generated.unlink(missing_ok=True)
+else:
+    # 写入缓存 + return
+```
+
+### P1: webfetch 抓取 arxiv 正文过浅 + 回退链重排
+
+**触发场景**：arxiv2md CLI/API 均失败后，webfetch 取 `/abs/{id}` abstract 页仅 ~3KB（不含正文），但旧阈值 1000 bytes 判定为成功。GlossyGS 因此只有 abstract。
+
+**修复**：`_utils.py` `safe_download_arxiv()` — 简化为 arxiv2md CLI/API 两级自动回退，失败后写 `agent_action: fetch_alphaxiv` 标记。HTTP 回退移除，改为 agent MCP 补全步骤内的嵌套回退。最终链：
+
+```
+arxiv2md CLI → arxiv2md API → ❌ → agent_action 标记 → MCP fullText → alphaXiv overview → arxiv HTML5
+```
+
+## [2026-07-31] P1+P2 流程优化
+
+### P1: `filter.py` 写 brief 时不填 `- 源文件:` 字段
+
+`filter.py:698-700` 已有写入逻辑（已存在）。日期参数生产环境永远有值。
+
+### P1: `health.py` `check_overview_sync` 全量重写覆盖手动追加
+
+`sync-overview.py:144-182` 新增 `_extract_manual_sections()` 保留 index.md 中不存在的章节。`--write` 和 `--check` 均考虑了手动追加内容。
+
+### P2: brief.md 条目状态 `[x]` 替换笨重
+
+`ingest.py` `_remove_entry_from_brief()` 合入后直接归档+删除条目，不再需要手动替换 checkbox。
+
+### P2: `ingest.py --from-digest` task 文件流程冗余
+
+`run_from_digest()` 使用 `WIKI_LLM_DIRECT=1` 模式（单 prompt/response 文件），跳过 task JSON 和 manifest 的构建。

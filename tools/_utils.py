@@ -43,12 +43,12 @@ PROMPT_FILE = REPO_ROOT / "raw" / ".tmp" / "wiki-llm-prompt.md"
 RESPONSE_FILE = REPO_ROOT / "raw" / ".tmp" / "wiki-llm-response.md"
 
 
-def call_llm(prompt, max_tokens=8192):
-    """调用 LLM，支持两种模式。
+def call_llm(prompt, max_tokens=8192, task_id=None):
+    """调用 LLM，支持三种模式。
 
     模式 1 — task 文件模式（默认）：
         写 prompt 到 TASK_DIR，返回 ""。agent 处理 task 文件后执行 --phase2。
-        由 WIKI_TASK_MODE=1 或未设置环境变量触发。
+        当 `task_id` 参数指定时使用该 ID，否则自动生成。
 
     模式 2 — 直接 LLM 模式（WIKI_LLM_DIRECT=1）：
         写 prompt 到 PROMPT_FILE，打印说明后返回 ""。
@@ -78,11 +78,10 @@ def call_llm(prompt, max_tokens=8192):
         print(f"{'='*60}\n")
         return ""
 
-    # 模式 1: task 文件模式（兼容）
-    import hashlib
-    task_id = f"auto_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
-    prepare_task(task_id, prompt, max_tokens)
-    print(f"  📝 Task 已写入: {TASK_DIR / task_id}.json (phase1 模式)")
+    # 模式 1: task 文件模式
+    tid = task_id if task_id else f"auto_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
+    prepare_task(tid, prompt, max_tokens)
+    print(f"  📝 Task 已写入: {TASK_DIR / tid}.json")
     return ""
 
 
@@ -91,7 +90,7 @@ def auto_call_or_phase1(prompt: str, max_tokens: int = 8192, task_id: str = "aut
     if '--phase2' in sys.argv:
         return read_result(task_id)
     tid = task_id if task_id != "auto" else f"auto_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
-    call_llm(prompt, max_tokens)
+    call_llm(prompt, max_tokens, task_id=tid)
     return ""
 
 
@@ -463,6 +462,8 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
         cache_path.unlink(missing_ok=True)
 
     # ── CLI mode: arxiv2md <id> -o <dir> → outputs to <dir>/<Title>.md ──
+    # Record existing .md files before CLI to detect leftovers
+    existing_before = set(out_dir.glob("*.md")) if out_dir.exists() else set()
     try:
         result = subprocess.run(
             [sys.executable, "-m", "arxiv2md", arxiv_id,
@@ -471,9 +472,9 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
             capture_output=True, text=True, timeout=120,
         )
         if result.returncode == 0:
-            md_files = list(out_dir.glob("*.md"))
-            if md_files:
-                generated = md_files[0]
+            new_files = [f for f in out_dir.glob("*.md") if f not in existing_before]
+            if new_files:
+                generated = max(new_files, key=lambda f: f.stat().st_mtime)
                 content = generated.read_text(encoding="utf-8")
                 if len(content) >= 5000:
                     content = _ensure_title_header(content)
@@ -483,18 +484,24 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
                             out_path.unlink()
                         generated.rename(out_path)
                     out_path.write_text(content, encoding="utf-8")
-                    # Validate arxiv_id in content
+                    # Validate arxiv_id in content; reject on mismatch
                     actual_id = _extract_arxiv_id_from_content(content)
                     if actual_id and actual_id != arxiv_id:
-                        print(f"  ⚠️  下载内容 arxiv ID 不匹配：期望 {arxiv_id}，实际 {actual_id}")
-                    # Write to cache
-                    cache_dir.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_text(content, encoding="utf-8")
-                    return content
+                        print(f"  ⚠️  arxiv ID 不匹配：期望 {arxiv_id}，实际 {actual_id}，走下一个回退")
+                        out_path.unlink(missing_ok=True)
+                        generated.unlink(missing_ok=True)
+                    else:
+                        cache_dir.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_text(content, encoding="utf-8")
+                        return content
                 print(f"  ⚠️  arxiv2md CLI 输出过短 ({len(content)} bytes)，改用 API")
                 generated.unlink(missing_ok=True)
     except Exception as e:
         print(f"  ⚠️  arxiv2md CLI 失败 ({e})，改用 API")
+    # Clean up CLI-created temp files (title-named .md) before fallback
+    for f in list(out_dir.glob("*.md")):
+        if f not in existing_before and f != out_path:
+            f.unlink(missing_ok=True)
 
     # ── Fallback: Python API ──
     try:
@@ -508,30 +515,24 @@ def safe_download_arxiv(arxiv_id: str, out_path: Path) -> str:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(content, encoding="utf-8")
             return content
-        print(f"  ⚠️  arxiv2md API 输出过短 ({len(content)} bytes)，尝试 webfetch")
+        print(f"  ⚠️  arxiv2md API 输出过短 ({len(content)} bytes)")
     except ImportError:
-        raise RuntimeError("arxiv2md not installed")
+        pass  # fall through to marker below
     except Exception as e:
-        print(f"  ⚠️  arxiv2md API 失败 ({e})，尝试 webfetch")
+        print(f"  ⚠️  arxiv2md API 失败 ({e})")
 
-    # ── Fallback 2: webfetch arxiv abstract page ──
-    try:
-        import requests as _req
-        abs_url = f"https://arxiv.org/abs/{arxiv_id}"
-        headers = {'User-Agent': 'Mozilla/5.0 (compatible; WikiBot/1.0)'}
-        resp = _req.get(abs_url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        import trafilatura
-        text = trafilatura.extract(resp.text, include_formatting=True) or resp.text[:50000]
-        content = _ensure_title_header(text)
-        out_path.write_text(content, encoding="utf-8")
-        if len(content) >= 1000:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(content, encoding="utf-8")
-            print(f"  [OK] webfetch 提取到 {len(content)} bytes")
-            return content
-    except Exception as e2:
-        raise RuntimeError(f"所有 fallback 均失败: arxiv2md CLI/API + webfetch ({e2})")
+    # ── arxiv2md 均失败 → 写 agent_action 标记，由 agent 通过 MCP 补全 ──
+    marker = f"""---
+url: https://arxiv.org/abs/{arxiv_id}
+source: ""
+agent_action: fetch_alphaxiv
+agent_note: "arxiv2md CLI/API 均失败，需要 agent 通过 alphaXiv HTTP overview 获取，否则 MCP fullText"
+---
+
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(marker, encoding="utf-8")
+    raise RuntimeError(f"arxiv2md CLI/API 均失败，写入 agent_action 标记待 MCP 补全")
 
 
 def fetch_web_source(url: str, out_path: Path) -> bool:

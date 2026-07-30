@@ -187,6 +187,8 @@ def run_archive(force_date: str = None) -> list[str]:
             if archive_entries:
                 to_archive[d] = archive_entries
             to_delete.extend(delete_entries)
+            if forced and not all_done:
+                keep.extend(e for e in group if not is_terminal(e))
         else:
             keep.extend(group)
 

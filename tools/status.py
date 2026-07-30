@@ -180,12 +180,10 @@ TRIGGER_WORDS = {
     "filter 筛选": "filter",
     "生成深度阅读": "deep read",
     "合入 wiki": "ingest from digest",
-    "拉取 feeds": "feeds",
-    "拉取 feeds（首次）": "feeds",
 }
 
 
-def suggest_next(brief, inbox_links, inbox_files, feeds):
+def suggest_next(brief, inbox_links, inbox_files):
     """Suggest next pipeline step with trigger words."""
     steps = []
 
@@ -201,18 +199,6 @@ def suggest_next(brief, inbox_links, inbox_files, feeds):
     if brief.get("ingest_pending", 0) > 0:
         steps.append("合入 wiki")
 
-    now = datetime.now(timezone.utc)
-    for f in feeds:
-        if f["enabled"] and f["last_fetch_date"]:
-            last = datetime.strptime(f["last_fetch_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            days_since = (now - last).days
-            if days_since >= 1:
-                steps.append("拉取 feeds")
-                break
-        elif f["enabled"] and not f["last_fetch_date"]:
-            steps.append("拉取 feeds（首次）")
-            break
-
     if not steps:
         return "无待办事项"
 
@@ -224,14 +210,12 @@ def run_status():
     inbox_links = check_inbox_links()
     inbox_files = check_inbox_files()
     brief = check_brief()
-    feeds = check_feeds()
-    suggestion = suggest_next(brief, inbox_links, inbox_files, feeds)
+    suggestion = suggest_next(brief, inbox_links, inbox_files)
 
     return {
         "inbox_links": inbox_links,
         "inbox_files": inbox_files,
         "brief": brief,
-        "feeds": feeds,
         "suggestion": suggestion,
     }
 
@@ -256,18 +240,6 @@ def format_report(data):
     else:
         lines.append(f"4. deep-read: {b['deep_read']} checked")
         lines.append(f"5. ingest: {b['ingest']} checked")
-
-    for f in data["feeds"]:
-        name = f["name"]
-        if not f["enabled"]:
-            lines.append(f"6. feeds: {name} (disabled)")
-        elif f["last_fetch_date"]:
-            now = datetime.now(timezone.utc)
-            last = datetime.strptime(f["last_fetch_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            days = (now - last).days
-            lines.append(f"6. feeds: {name} last fetch {f['last_fetch_date']} ({days}d ago)")
-        else:
-            lines.append(f"6. feeds: {name} never fetched")
 
     lines.append(f"\n→ 建议: {data['suggestion']}")
     return "\n".join(lines)

@@ -1,3 +1,24 @@
+## [2026-07-31] ingest | GlossyGS: Inverse Rendering of Glossy Objects with 3D Gaussian Splatting
+Added source. Key claims: 3D-GS 光泽物体逆渲染，法线图预滤波 + 微表面分割先验，Shiny Blender 重光照 PSNR 25.72，实时 30 FPS。
+
+## [2026-07-31] ingest | RadiosityGS: Differentiable Light Transport with Gaussian Surfels via Adapted Radiosity
+Added source. Key claims: 高斯 surfels + 经典辐射度理论，球谐系数空间操作，全局光照 5-10h 训练，推理 515 FPS。
+
+## [2026-07-31] ingest | Mobile-GS: Real-time Gaussian Splatting for Mobile Devices
+Added source. Key claims: 移动端 3DGS，无排序渲染 + 球谐蒸馏 + 神经量化 + 剪枝，骁龙 8 Gen 3 上 116 FPS。
+
+## [2026-07-31] ingest | GLINT: Modeling Scene-Scale Transparency via Gaussian Radiance Transport
+Added source. Key claims: 场景尺度透明度重建，分解高斯表示（界面/传输/反射），混合光栅化/光线追踪，3D-FRONT-T 基准 SOTA。
+
+## [2026-07-31] ingest | STREAM3D: Generating 3D Meshes from Videos
+Added source. Key claims: 视频到 mesh 生成，多视角一致性约束，直接从视频序列输出流形网格。
+
+## [2026-07-31] ingest | Ref-GS: Directional Factorization for 2D Gaussian Splatting
+Added source. Key claims: 反射场景 3DGS，Sph-Mip 编码 + 延迟渲染 + 方向分解，ShinySynthetic PSNR 34.00，训练 12.6 分钟。
+
+## [2026-07-31] ingest | A Generalizable Light Transport 3D Embedding for Global Illumination
+Added source. Key claims: 可泛化全局光照，点云 + 线性 Transformer + 局部解码，14k 室内场景基准，推理 O(K) 常数时间。
+
 ## [2026-07-30] ingest | RaDe-GS: Rasterizing Depth in Gaussian Splatting
 Added source. Key claims: 3D-GS 栅格化深度/法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟，远快于 NeRF 类方法。
 

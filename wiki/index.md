@@ -42,6 +42,14 @@ This file is maintained by the LLM. Updated on every ingest.
 ## Papers
 - [Surflo](sources/surflo.md) — 全局 latent + 流匹配实现前馈式任意密度 3D 表面重建，从无位姿多视图直接生成定向点云和网格
 - [Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction](sources/neural-harmonic-textures.md) — 基元绑定谐波特征 + 延迟着色 MLP，提升 3DGS 单基元表达力，新视角合成 SOTA
+## Papers
+- [GlossyGS: Inverse Rendering of Glossy Objects with 3D Gaussian Splatting](sources/glossygs-inverse-rendering-of-glossy-objects-with-3d-gaussian-splatting) — 3D-GS 光泽物体逆渲染：法线图预滤波 + 微表面分割先验，实时 30 FPS 重光照
+- [RadiosityGS: Differentiable Light Transport with Gaussian Surfels](sources/radiositygs-differentiable-light-transport-with-gaussian-surfels) — 高斯 surfels + 经典辐射度理论，可微光传输 + 数百 FPS 全局光照渲染
+- [Mobile-GS: Real-time Gaussian Splatting for Mobile Devices](sources/mobilegs-real-time-gaussian-splatting-for-mobile-devices) — 移动端 3DGS：无排序渲染 + 球谐蒸馏 + 神经量化 + 剪枝，骁龙 8 Gen 3 上 116 FPS
+- [GLINT: Modeling Scene-Scale Transparency via Gaussian Radiance Transport](sources/glint-modeling-scene-scale-transparency-via-gaussian-radiance-transport) — 场景尺度透明度重建：分解高斯表示 + 混合光栅化/光线追踪，3D-FRONT-T 基准 SOTA
+- [STREAM3D: Generating 3D Meshes from Videos](sources/stream3d-generating-3d-meshes-from-videos) — 视频到 mesh 生成：多视角一致性约束，直接从视频序列输出流形网格
+- [Ref-GS: Directional Factorization for 2D Gaussian Splatting](sources/ref-gs-directional-factorization-for-2d-gaussian-splatting) — 反射场景 3DGS：Sph-Mip 编码 + 延迟渲染 + 方向分解，ShinySynthetic SOTA
+- [A Generalizable Light Transport 3D Embedding for Global Illumination](sources/a-generalizable-light-transport-3d-embedding-for-global-illumination) — 可泛化全局光照：点云 + 线性 Transformer + 局部解码，14k 室内场景基准
 ## Entities
 
 ## Concepts

@@ -151,6 +151,42 @@ def get_current_overview_slugs(content: str) -> set[str]:
     return slugs
 
 
+def _extract_manual_sections(existing: str, new_slugs: set[str]) -> str:
+    """Extract sections from existing overview whose wikilinks aren't in new_slugs.
+
+    A "section" is the content under a `###` header. Sections whose ALL wikilinks
+    are absent from new_slugs are considered manual additions and returned.
+    """
+    lines = existing.split('\n')
+    sections = []
+    current_header = None
+    current_lines = []
+    current_slugs = set()
+
+    def _flush():
+        nonlocal current_header, current_lines, current_slugs
+        if current_header and current_lines:
+            has_orphan = current_slugs and current_slugs.isdisjoint(new_slugs)
+            has_no_links = not current_slugs
+            if has_orphan or has_no_links:
+                sections.append('\n'.join([current_header] + current_lines))
+        current_header = None
+        current_lines = []
+        current_slugs = set()
+
+    for line in lines:
+        if line.startswith('### '):
+            _flush()
+            current_header = line
+        elif current_header:
+            current_lines.append(line)
+            for m in re.finditer(r'\[\[([^\]|]+)(?:\|[^\]|]+)?\]\]', line):
+                current_slugs.add(m.group(1).strip().lower())
+
+    _flush()
+    return '\n\n'.join(sections).strip()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Sync wiki/overview.md from wiki/index.md"
@@ -171,6 +207,15 @@ def main():
     if args.write:
         from datetime import date
         new_overview = new_overview.replace("__TODAY__", date.today().isoformat())
+
+        # Preserve manual sections not derived from index.md
+        existing = read_file(OVERVIEW_FILE)
+        if existing:
+            new_slugs = get_current_overview_slugs(new_overview)
+            manual = _extract_manual_sections(existing, new_slugs)
+            if manual:
+                new_overview = new_overview.rstrip() + '\n\n' + manual + '\n'
+
         OVERVIEW_FILE.write_text(new_overview, encoding="utf-8")
         print(f"✅ 已更新: {OVERVIEW_FILE.relative_to(REPO_ROOT)}")
         print(new_overview)
@@ -179,12 +224,18 @@ def main():
     if args.check:
         current = read_file(OVERVIEW_FILE)
         new_with_date = new_overview.replace("__TODAY__", "__IGNORE_DATE__")
-        cur_with_date = current.replace("__TODAY__" if "__TODAY__" in current else "last_updated", "__IGNORE_DATE__")
-        # Remove date lines for comparison
-        cur_stripped = re.sub(r'last_updated:.*', '', current)
-        new_stripped = re.sub(r'last_updated:.*', '', new_with_date)
 
-        if cur_stripped.strip() == new_stripped.strip():
+        # Reconstruct expected content including manual sections
+        new_slugs = get_current_overview_slugs(new_with_date)
+        manual = _extract_manual_sections(current, new_slugs)
+        expected = new_with_date
+        if manual:
+            expected = expected.rstrip() + '\n\n' + manual + '\n'
+
+        cur_stripped = re.sub(r'last_updated:.*', '', current)
+        exp_stripped = re.sub(r'last_updated:.*', '', expected)
+
+        if cur_stripped.strip() == exp_stripped.strip():
             print("✅ overview.md is in sync")
             sys.exit(0)
         else:
