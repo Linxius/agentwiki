@@ -24,6 +24,12 @@ Steps:
    - 清空 `raw/inbox/`
 7. 控制台汇总 LLM 建议的新增兴趣/排除项供参考
 
+## ⚠️ brief 勾选规则
+
+- 生成的 brief 条目**默认全部不勾选**（`- [ ] 深度阅读 / 合入 wiki / 不感兴趣 / 不处理`）
+- **agent 不得自行勾选任何条目**。勾选 `[x]` 只能由用户决定；agent 只展示内容、不替用户做选择
+- 后续 `deep-read` / `ingest` 仅处理用户已勾选的条目
+
 **旧工作流（废弃）：** `--phase1/--phase2` 文件传输协议。不再使用。
   > 如仍使用 phase2，注意结果文件必须由 `_utils.write_result(tid, content)` 写入（产生 `{tid}.txt` + `{tid}.done`），
   > 不要手动创建文件。传递 `--keep-phase2-results` 可防止 `clean_task_dirs()` 删掉中间产物。

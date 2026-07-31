@@ -301,6 +301,8 @@ def build_analyze_prompt(file_path: Path, interests_desc: str, disinterests_desc
 
 def parse_analyze_response(raw: str, file_path: Path, source_url: str = "") -> list[dict]:
     """Parse LLM response into structured results."""
+    if not raw or not raw.strip():
+        raise ValueError("LLM 返回空字符串（模式1/2：task/prompt 已写入，需 agent 处理；或响应为空）")
     clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     clean = re.sub(r"\s*```$", "", clean.strip())
     data = json.loads(clean)
@@ -337,8 +339,12 @@ def parse_analyze_response(raw: str, file_path: Path, source_url: str = "") -> l
     return results
 
 
-def analyze_file(file_path: Path, interests_desc: str, disinterests_desc: str = "") -> list[dict]:
-    """Use LLM to analyze file. Direct mode (calls LLM API)."""
+def analyze_file(file_path: Path, interests_desc: str, disinterests_desc: str = "") -> list[dict] | None:
+    """Use LLM to analyze file. Direct mode (calls LLM API).
+
+    Returns None when call_llm 返回空字符串（模式1/2：task/prompt 已写入，
+    需要 agent 处理）。此时上层应统一切到 phase1，而非当作失败。
+    """
     if not interests_desc.strip():
         print("  Warning: No interests defined. Generating summary only.")
 
@@ -347,6 +353,12 @@ def analyze_file(file_path: Path, interests_desc: str, disinterests_desc: str = 
 
     try:
         raw = call_llm(prompt, max_tokens=4096)
+    except Exception as e:
+        print(f"  ⚠️  LLM call failed for {file_path.name}: {e}")
+        raise RuntimeError(f"LLM analysis failed for {file_path.name}")
+    if not raw or not raw.strip():
+        return None
+    try:
         return parse_analyze_response(raw, file_path, source_url)
     except Exception as e:
         print(f"  ⚠️  LLM failed for {file_path.name}: {e}")
@@ -1185,20 +1197,22 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                 print("  ℹ️  --keep-phase2-results: 保留 TASK_DIR / RESULT_DIR")
         else:
             # Normal mode: try direct LLM calls.
-            # If call_llm returns empty (phase1 architecture where agent=LLM),
-            # auto-switch to phase1: write task files and tell user to run --phase2.
+            # call_llm 返回空（模式1/2：task/prompt 已写入，需 agent 处理）时，
+            # 不当作失败，统一切到 phase1 写 task 文件，让用户运行 --phase2。
             with ThreadPoolExecutor(max_workers=2) as exec:
                 future_map = {
                     exec.submit(analyze_file, fp, interests_desc, disinterests_desc): (fp, rel)
                     for fp, rel in pending
                 }
 
-                any_succeeded = False
+                needs_agent = False
                 for future in as_completed(future_map):
                     fp, rel = future_map[future]
                     try:
                         file_results = future.result()
-                        any_succeeded = True
+                        if file_results is None:
+                            needs_agent = True
+                            continue
                         serialized = []
                         for r in file_results:
                             item = dict(r)
@@ -1210,8 +1224,8 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                         print(f"  ⚠️  {fp.name} failed: {e}")
                         failed_files.add(rel)
 
-            # All files failed → check if call_llm is in phase1 mode
-            if pending and not any_succeeded and len(failed_files) == len(pending):
+            # call_llm 返回空 → 模式1/2，写 task 统一交 agent 处理
+            if needs_agent:
                 tasks = []
                 for fp, rel in pending:
                     prompt = build_analyze_prompt(fp, interests_desc, disinterests_desc)
@@ -1222,7 +1236,7 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                         "metadata": {"file": rel, "title": fp.stem},
                     })
                 prepare_tasks(tasks)
-                print(f"\n📝 检测到 phase1 模式（call_llm 返回空），已写入 {len(tasks)} 个分析任务到 {TASK_DIR}")
+                print(f"\n📝 检测到模式1/2（call_llm 返回空），已写入 {len(tasks)} 个分析任务到 {TASK_DIR}")
                 print("   请让 agent 处理这些任务，然后运行:")
                 print(f"     python tools/filter.py --phase2")
                 return  # Skip cleanup — inbox stays untouched
