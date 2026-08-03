@@ -538,21 +538,32 @@ agent_note: "arxiv2md CLI/API 均失败，需要 agent 通过 alphaXiv HTTP over
 def fetch_web_source(url: str, out_path: Path) -> bool:
     """Fetch a non-arxiv web page and save as markdown source file.
 
-    Priority: trafilatura (best) -> markitdown HTML->MD -> raw text.
+    Priority: requests(trafilatura) -> markitdown -> raw text -> r.jina.ai proxy.
+    r.jina.ai handles anti-bot sites (zhihu, wechat) that return 403 to direct requests.
     Returns True on success.
     """
     import requests as _req
+
+    def _write(content: str) -> bool:
+        if content and len(content) > 200:
+            out_path.write_text(content, encoding="utf-8")
+            return True
+        return False
+
+    resp = None
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (compatible; WikiBot/1.0)'}
         resp = _req.get(url, headers=headers, timeout=30)
         resp.raise_for_status()
+    except Exception as e:
+        print(f"  Warning: direct fetch failed for {url}: {e} → r.jina.ai")
 
+    if resp is not None:
         # 1) trafilatura - clean article extraction
         try:
             import trafilatura
             text = trafilatura.extract(resp.text, include_formatting=True, include_links=True)
-            if text and len(text) > 200:
-                out_path.write_text(text, encoding="utf-8")
+            if _write(text):
                 return True
         except ImportError:
             pass
@@ -567,18 +578,25 @@ def fetch_web_source(url: str, out_path: Path) -> bool:
             md = MarkItDown(enable_plugins=False)
             result = md.convert(tmp.name)
             _os.unlink(tmp.name)
-            if result and result.text_content and len(result.text_content) > 200:
-                out_path.write_text(result.text_content, encoding="utf-8")
+            if _write(result.text_content if result else ""):
                 return True
         except Exception:
             pass
 
         # 3) fallback: URL + first 10K chars
-        out_path.write_text(f"# {url}\n\nURL: {url}\n\n{resp.text[:10000]}", encoding="utf-8")
-        return bool(resp.text)
+        if _write(f"# {url}\n\nURL: {url}\n\n{resp.text[:10000]}"):
+            return True
+
+    # 4) r.jina.ai proxy (anti-bot sites like zhihu)
+    try:
+        j = _req.get(f"https://r.jina.ai/{url}", timeout=60)
+        if j.status_code == 200 and len(j.text) > 200 and "Markdown Content:" in j.text:
+            md = j.text.split("Markdown Content:", 1)[-1].strip()
+            if _write(md):
+                return True
     except Exception as e:
-        print(f"  Warning: web fetch failed for {url}: {e}")
-        return False
+        print(f"  Warning: r.jina.ai fallback failed for {url}: {e}")
+    return False
 
 
 # ── Phase auto-runner (shared across scripts) ──

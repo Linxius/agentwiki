@@ -80,13 +80,25 @@ def check_empty_files(pages: list[Path], threshold: int = STUB_THRESHOLD_CHARS) 
 
 # ── Check: Index sync ───────────────────────────────────────────────
 
+def _resolve_index_link(link: str) -> Path | None:
+    """Resolve an index.md link to a disk path, auto-appending .md if needed."""
+    p = WIKI_DIR / link
+    if p.exists():
+        return p.resolve()
+    if not link.endswith(".md"):
+        alt = WIKI_DIR / (link + ".md")
+        if alt.exists():
+            return alt.resolve()
+    return None
+
+
 def _parse_index_links(index_content: str) -> set[str]:
     """Extract markdown link targets from index.md.
 
-    Matches patterns like: [Title](sources/slug.md)
-    Returns set of relative paths (e.g. 'sources/slug.md').
+    Matches patterns like: [Title](sources/slug.md) or [Title](sources/slug)
+    Returns set of relative paths (e.g. 'sources/slug.md' or 'sources/slug').
     """
-    return set(re.findall(r'\[.*?\]\(([^)]+\.md)\)', index_content))
+    return set(re.findall(r'\[.*?\]\(([^)]+)\)', index_content))
 
 
 def check_index_sync(pages: list[Path]) -> dict:
@@ -106,10 +118,15 @@ def check_index_sync(pages: list[Path]) -> dict:
     # Exclude it from both sides to avoid false positives.
     meta_pages = {"overview.md"}
 
+    stale_links = []
     index_paths = set()
     for link in index_links:
-        resolved = (WIKI_DIR / link).resolve()
-        if Path(link).name not in meta_pages:
+        if Path(link).name in meta_pages:
+            continue
+        resolved = _resolve_index_link(link)
+        if resolved is None:
+            stale_links.append(link)
+        else:
             index_paths.add(resolved)
 
     disk_paths = set()
@@ -117,10 +134,7 @@ def check_index_sync(pages: list[Path]) -> dict:
         if p.name not in meta_pages:
             disk_paths.add(p.resolve())
 
-    in_index_not_on_disk = [
-        str(p.relative_to(REPO_ROOT)) for p in sorted(index_paths - disk_paths)
-        if REPO_ROOT in p.parents or p == REPO_ROOT
-    ]
+    in_index_not_on_disk = sorted(stale_links)
     on_disk_not_in_index = [
         str(p.relative_to(REPO_ROOT)) for p in sorted(disk_paths - index_paths)
     ]
@@ -133,16 +147,22 @@ def check_index_sync(pages: list[Path]) -> dict:
 
 # ── Check: Log coverage ────────────────────────────────────────────
 
-def _parse_log_entries(log_content: str) -> set[str]:
+def _parse_log_entries(log_content: str) -> list[str]:
     """Extract page titles/slugs from log.md entries.
 
     Log format: ## [YYYY-MM-DD] ingest | Title Here
-    Returns set of lowercase title strings.
+    Returns list of cleaned lowercase title strings.
+
+    Cleaning: strip brackets and URLs from wikilink format
+    e.g. '[Title](path) — note' -> 'title'
     """
-    return set(
-        m.group(1).strip().lower()
-        for m in re.finditer(r'^## \[\d{4}-\d{2}-\d{2}\] ingest \| (.+)$', log_content, re.MULTILINE)
-    )
+    titles = []
+    for m in re.finditer(r'^## \[\d{4}-\d{2}-\d{2}\] ingest \| (.+)$', log_content, re.MULTILINE):
+        raw = m.group(1).strip()
+        # Strip wikilink format: '[Title](link) — note' -> 'Title'
+        cleaned = re.sub(r'^\[(.+?)\]\([^)]*\).*', r'\1', raw)
+        titles.append(cleaned.lower())
+    return titles
 
 
 def check_log_coverage(pages: list[Path]) -> list[dict]:
@@ -150,6 +170,11 @@ def check_log_coverage(pages: list[Path]) -> list[dict]:
 
     Only checks wiki/sources/*.md — entity/concept pages are created as
     side-effects of ingest and don't need their own log entry.
+
+    Matching strategy (in order):
+    1. Exact match: slug or frontmatter title exactly equals a log entry
+    2. Substring match: frontmatter title is contained in a log entry (or vice versa)
+    3. Slug match: log entry slug (from URL path) matches the page slug
     """
     log_content = read_file(LOG_FILE)
     logged_titles = _parse_log_entries(log_content)
@@ -160,15 +185,35 @@ def check_log_coverage(pages: list[Path]) -> list[dict]:
 
     missing = []
     for p in sorted(source_dir.glob("*.md")):
-        # Try matching by slug (filename without .md) or by frontmatter title
         slug = p.stem.lower().replace("-", " ").replace("_", " ")
 
-        # Also try extracting title from frontmatter
         content = read_file(p)
         title_match = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
         fm_title = title_match.group(1).strip().lower() if title_match else ""
 
-        if slug not in logged_titles and fm_title not in logged_titles:
+        matched = False
+
+        # Strategy 1: Exact match
+        if slug in logged_titles or fm_title in logged_titles:
+            matched = True
+
+        # Strategy 2: Substring match (handles truncated log titles)
+        if not matched:
+            for lt in logged_titles:
+                if fm_title and len(fm_title) > 20:
+                    if fm_title in lt or lt in fm_title:
+                        matched = True
+                        break
+                # Also check if log title slug (from URL) matches
+                if not matched:
+                    log_slug_match = re.search(r'\[.*?\]\((sources/[\w-]+\.md)\)', lt)
+                    if log_slug_match:
+                        log_slug = log_slug_match.group(1).lower()
+                        if slug.replace(" ", "-") in log_slug or log_slug in slug.replace(" ", "-"):
+                            matched = True
+                            break
+
+        if not matched:
             missing.append({
                 "path": str(p.relative_to(REPO_ROOT)),
                 "slug": p.stem,
@@ -181,6 +226,8 @@ def check_log_coverage(pages: list[Path]) -> list[dict]:
 # ── Check: Overview sync ──────────────────────────────────────────
 
 SYNC_SCRIPT = REPO_ROOT / "tools" / "sync-overview.py"
+SYNC_INDEX_SCRIPT = REPO_ROOT / "tools" / "sync-index.py"
+ISSUES_FILE = WIKI_DIR / "issues.md"
 
 
 def check_overview_sync() -> dict:
@@ -215,19 +262,134 @@ def check_overview_sync() -> dict:
         return {"status": "skipped", "reason": f"auto-fix failed: {(fix.stderr or '').strip()}"}
 
 
+# ── Fix: Index sync ─────────────────────────────────────────────────
+
+def fix_index_sync(fix_stale: bool = False) -> dict:
+    """Auto-fix index sync issues.
+
+    Always: add missing entries via sync-index.py --write (low risk incremental).
+    Only when fix_stale: prune stale entries via sync-index.py --prune.
+
+    Returns:
+        {"add": "success"|"skipped", "prune": "success"|"skipped"}
+    """
+    result = {"add": "skipped", "prune": "skipped"}
+
+    # Always auto-fix missing entries (incremental, low risk)
+    check = subprocess.run(
+        [sys.executable, str(SYNC_INDEX_SCRIPT), "--check"],
+        capture_output=True, text=True, timeout=30,
+        encoding='utf-8', errors='replace',
+    )
+    if check.returncode != 0:
+        write = subprocess.run(
+            [sys.executable, str(SYNC_INDEX_SCRIPT), "--write"],
+            capture_output=True, text=True, timeout=30,
+            encoding='utf-8', errors='replace',
+        )
+        if write.returncode == 0:
+            match = re.search(r'Added (\d+) entries', write.stdout)
+            count = int(match.group(1)) if match else 0
+            result["add"] = "success"
+            result["_added_count"] = count
+
+    # Only prune stale entries when explicitly requested (destructive)
+    if fix_stale:
+        prune = subprocess.run(
+            [sys.executable, str(SYNC_INDEX_SCRIPT), "--prune"],
+            capture_output=True, text=True, timeout=30,
+            encoding='utf-8', errors='replace',
+        )
+        if prune.returncode == 0:
+            match = re.search(r'Removed (\d+) stale entries', prune.stdout)
+            if match:
+                result["prune"] = "success"
+                result["_pruned_count"] = int(match.group(1))
+            else:
+                result["prune"] = "success"  # "No stale entries" also success
+        else:
+            result["prune"] = f"failed: {(prune.stderr or '').strip()}"
+
+    return result
+
+
+# ── Fix: Stub pages ─────────────────────────────────────────────────
+
+def fix_stubs(stubs: list[dict]) -> list[str]:
+    """Register stub pages to wiki/issues.md under ## Stub Pages.
+
+    Idempotent: skips paths already in the issues file.
+    Does NOT generate content (stub filling is a lint.py/LLM task).
+
+    Returns:
+        List of registered paths.
+    """
+    issues_content = read_file(ISSUES_FILE)
+
+    # Check if stubs already registered (idempotent guard)
+    registered = []
+    for stub in stubs:
+        if stub["path"] in issues_content:
+            continue
+        path = stub["path"]
+        status = stub["status"]
+        body = stub["body_bytes"]
+        registered.append(stub)
+        issues_content += f"- `{path}` — {status}, {body} bytes\n"
+
+    if registered:
+        issues_content += "\n"  # trailing newline
+        ISSUES_FILE.write_text(issues_content, encoding="utf-8")
+
+    return registered
+
+
 # ── Report Generation ───────────────────────────────────────────────
 
-def run_health() -> dict:
-    """Run all health checks, return structured results."""
+def run_health(fix: bool = False) -> dict:
+    """Run all health checks, return structured results.
+
+    Default behavior (no --fix):
+      - Auto-fix: index missing entries (incremental add), overview sync
+    With --fix:
+      - Plus: index stale entries (prune), stub pages registration to issues.md
+
+    Args:
+        fix: Enable all auto-fixes including destructive operations (prune, register).
+
+    Returns:
+        Structured results dict.
+    """
     pages = all_wiki_pages()
+    fixed = {}
+
+    # Default auto-fix: index missing entries (low risk incremental add)
+    fix_res = fix_index_sync(fix_stale=fix)
+    fixed["index_missing_added"] = fix_res.get("add") == "success"
+    fixed["index_stale_pruned"] = fix_res.get("prune") == "success" and fix
+    fixed["_added_count"] = fix_res.get("_added_count", 0)
+    fixed["_pruned_count"] = fix_res.get("_pruned_count", 0)
+
+    # Run checks after fixes (reflect post-fix state)
+    index_sync = check_index_sync(pages)
+    empty_files = check_empty_files(pages)
+    log_coverage = check_log_coverage(pages)
+    overview_sync = check_overview_sync()
+
+    # Only --fix: register stubs to issues.md (idempotent, no content generation)
+    stubs_registered = 0
+    if fix and empty_files:
+        stubs_registered = len(fix_stubs(empty_files))
 
     return {
         "date": date.today().isoformat(),
         "total_pages": len(pages),
-        "empty_files": check_empty_files(pages),
-        "index_sync": check_index_sync(pages),
-        "log_coverage": check_log_coverage(pages),
-        "overview_sync": check_overview_sync(),
+        "empty_files": empty_files,
+        "index_sync": index_sync,
+        "log_coverage": log_coverage,
+        "overview_sync": overview_sync,
+        "fixed": fixed,
+        "_stubs_registered": stubs_registered,
     }
 
 
@@ -306,6 +468,25 @@ def format_report(results: dict) -> str:
         lines.append("All source pages have corresponding log entries. ✅")
     lines.append("")
 
+    # ── Auto-fixed ────────────────────────────────────────────────
+    fixed = results.get("fixed", {})
+    stubs_reg = results.get("_stubs_registered", 0)
+    added = fixed.get("_added_count", 0)
+    pruned = fixed.get("_pruned_count", 0)
+    auto_fixes = []
+    if added:
+        auto_fixes.append(f"index.md: added {added} missing entries")
+    if pruned:
+        auto_fixes.append(f"index.md: pruned {pruned} stale entries")
+    if stubs_reg:
+        auto_fixes.append(f"issues.md: registered {stubs_reg} stub pages")
+    if auto_fixes:
+        lines.append("## Auto-fixed")
+        lines.append("")
+        for af in auto_fixes:
+            lines.append(f"- {af}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -317,9 +498,11 @@ if __name__ == "__main__":
                         help="Save report to wiki/health-report.md")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON instead of markdown")
+    parser.add_argument("--fix", action="store_true",
+                        help="Run all auto-fixes including stale pruning and stub registration (default always fixes: index missing entries + overview sync)")
     args = parser.parse_args()
 
-    results = run_health()
+    results = run_health(fix=args.fix)
 
     if args.json:
         print(json.dumps(results, indent=2))

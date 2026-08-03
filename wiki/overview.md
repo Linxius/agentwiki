@@ -3,7 +3,7 @@ title: "Overview"
 type: synthesis
 tags: []
 sources: []
-last_updated: "2026-07-31"
+last_updated: "2026-08-04"
 ---
 
 # Overview
@@ -46,4 +46,3 @@ last_updated: "2026-07-31"
 
 - [[CGVQM: Computer Graphics Video Quality Metric|cgvqm]] — Intel Labs 全参考视频质量指标，针对渲染失真校准，配套 CGVQD 数据集
 - [[RaDe-GS: Rasterizing Depth in Gaussian Splatting|ra-de-gs]] — 在 3D-GS 上栅格化深度与法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟
-- [[World Tracing|world-tracing-generative-pixel-aligned-geometry-beyond-the-visible]] — 像素对齐多层几何扩散，单图生成完整3D场景（可见+遮挡），SOTA 几何 F1

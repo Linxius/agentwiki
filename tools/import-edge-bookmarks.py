@@ -95,6 +95,19 @@ def list_folders(node: dict, prefix: str = "", depth: int = 0, max_depth: int = 
             list_folders(child, prefix, depth + 1, max_depth)
 
 
+def edge_is_running() -> bool:
+    """Check if Edge browser is running (it may overwrite the Bookmarks file)."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq msedge.exe"],
+            capture_output=True, text=True, encoding="gbk", errors="ignore"
+        )
+        return "msedge.exe" in result.stdout
+    except Exception:
+        return False
+
+
 def write_inbox(urls: list[dict], append: bool = True):
     """Write URLs to inbox.md, one per line as markdown links."""
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
@@ -236,6 +249,20 @@ def archive_bookmarks(data: dict, source_path: str, archive_path: str, urls_to_a
     source_folder["children"] = remaining
 
     archive_path_full = f"{archive_path}/{today}"
+
+    # 记录归档 URL 到仓库（与源文件同目录可查，解决浏览器归档不可见问题）
+    try:
+        log_dir = REPO_ROOT / "raw" / "digest" / "sources" / "archive-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"{today}-bookmarks.txt"
+        entries = [f"- [{bm.get('name', '')}]({bm['url']})" for bm in to_move if bm.get("url")]
+        if entries:
+            with open(log_file, "a", encoding="utf-8") as fh:
+                fh.write(f"## {source_path} → {archive_path_full}\n" + "\n".join(entries) + "\n\n")
+            print(f"  📝 归档记录: {log_file.relative_to(REPO_ROOT)}")
+    except Exception as e:
+        print(f"  ⚠️  归档记录写入失败: {e}")
+
     print(f"✅ 已归档 {len(to_move)} 个书签: {source_path} → {archive_path_full}")
     return len(to_move)
 
@@ -330,7 +357,11 @@ def main():
                 json.dump(data, f, ensure_ascii=False, indent=3)
             shutil.move(str(tmp_file), str(bookmarks_file))
             print(f"📝 Edge 书签文件已更新: {bookmarks_file}")
-            print("⚠️  请重启 Edge 浏览器使更改生效。")
+            if edge_is_running():
+                print("⚠️  Edge 正在运行，书签文件可能被 Edge 覆盖回写，归档可能不生效！")
+                print("   → 请关闭 Edge 后再运行本脚本，或重启 Edge 使更改生效。")
+            else:
+                print("✅ Edge 未运行，书签归档已安全写入。")
         return
 
     # ── Default: import → dedup → archive ──
@@ -371,7 +402,11 @@ def main():
                 json.dump(data, f, ensure_ascii=False, indent=3)
             shutil.move(str(tmp_file), str(bookmarks_file))
             print(f"📝 Edge 书签文件已更新")
-            print("⚠️  请重启 Edge 浏览器使更改生效。")
+            if edge_is_running():
+                print("⚠️  Edge 正在运行，书签文件可能被 Edge 覆盖回写，归档可能不生效！")
+                print("   → 请关闭 Edge 后再运行本脚本，或重启 Edge 使更改生效。")
+            else:
+                print("✅ Edge 未运行，书签归档已安全写入。")
     else:
         print(f"\n━━━ Step 3/3: 归档书签 (跳过) ━━━")
 

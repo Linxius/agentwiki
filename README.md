@@ -290,6 +290,20 @@ Then ingest the resulting `.md`:
 ingest raw/papers/my-paper.md
 ```
 
+### Health Check (Recommended Regularly)
+
+```bash
+python tools/health.py            # check + auto-fix index sync, overview
+python tools/health.py --fix      # also prune stale entries + register stubs
+python tools/health.py --json     # machine-readable output
+```
+
+Auto-fixes:
+- **Index sync** — adds missing entries to `wiki/index.md` (always runs)
+- **Overview sync** — regenerates `wiki/overview.md` from index (always runs)
+- **Stale pruning** — removes index entries for deleted files (`--fix` only)
+- **Stub registration** — logs stub pages to `wiki/issues.md` (`--fix` only)
+
 ### Batch Directory Conversion (Advanced)
 
 To pre-convert an entire directory (useful for bulk imports):

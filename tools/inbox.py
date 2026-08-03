@@ -923,6 +923,32 @@ agent_note: "{reason}"
         suffix = ".md"
 
     out_file = file_dir / f"{slug}{suffix}"
+    if content.startswith("# Error: Could not fetch"):
+        # 反爬站直连失败 → 先试 r.jina.ai 代理，再写 agent_action 标记待 agent 补全
+        try:
+            from _utils import fetch_web_source
+            if fetch_web_source(link, out_file):
+                return out_file
+        except Exception:
+            pass
+        agent_md = f"""---
+title: "{slug} (获取失败)"
+url: "{link}"
+agent_action: fetch_web_fallback
+agent_note: "直连及 r.jina.ai 均失败，需要 agent 用浏览器/代理抓取补全"
+---
+
+# {slug}
+
+> ⚠️ 网页获取失败，请 agent 用浏览器打开 {link} 抓取内容补全。
+
+## 原始链接
+
+- {link}
+"""
+        out_file.write_text(agent_md, encoding="utf-8")
+        print(f"  ⚠️  网页获取失败（{link}）→ 已标记 agent_action: fetch_web_fallback")
+        return out_file
     out_file.write_text(content, encoding="utf-8")
     return out_file
 

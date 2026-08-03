@@ -1,3 +1,53 @@
+## [2026-08-04] lint | Wiki health check
+
+Ran lint. See lint-report.md for details.
+
+## [2026-08-04] lint | Wiki health check
+
+Ran lint. See lint-report.md for details.
+
+## [2026-08-04] ingest | ARM Neural Super Sampling (NSS)
+
+Added source. Note: Hugging Face page returns 404.
+
+## [2026-08-04] ingest | ARM Neural Technology for Mobile Games
+
+Added source. Note: ARM Developer documentation access denied.
+
+## [2026-08-04] ingest | [A LoD of Gaussians: Unified Training and Rendering for Ultra-Large Scale Reconstruction with External Memory](sources/a-lod-of-gaussians.md) — SIGGRAPH 2026，外部存储 + HSPT 层级结构，消费级 GPU 6000 万高斯体训练与渲染
+
+## [2026-08-04] ingest | AMD FidelityFX Super Resolution (FSR 1.0)
+
+Added source. Key claims: Header-only EASU + RCAS 空间超分，12-tap 各向异性 Lanczos 滤波 + 2x2 邻域去振铃，噪声感知锐化。
+
+## [2026-08-04] ingest | Rectified Flow
+
+Added source. Key claims: 流匹配学习直线 ODE 传输映射，Reflow 直化过程实现单步 Euler 推理。
+
+## [2026-08-04] ingest | Snapdragon Game Super Resolution (SGSR)
+
+Added source. Key claims: 高通 Adreno GPU 超分着色器，V1 单 pass 空间上采样 + V2 时间性融合，YCoCg 色彩空间 + R32UI 位打包。
+
+## [2026-08-04] ingest | World Tracing: Generative Pixel-Aligned Geometry Beyond the Visible
+
+Added source. Key claims: 像素对齐多层几何表示，WT-DiT 流匹配扩散 Transformer，forward-filling + 混合噪声调度，超越单层基线和 3D 生成器。
+
+# Wiki Log
+
+## [2026-08-04] ingest | Sparse Voxels Rasterization: Real-time High-fidelity Radiance Field Rendering
+
+Added source. Key claims: SVRaster 使用神经自由体素光栅化，方向相关 Morton 排序消除 popping artifact，Mip-NeRF360 LPIPS 0.185 优于 3DGS。
+
+## [2026-08-04] ingest | Ref-GS: Directional Factorization for 2D Gaussian Splatting
+
+Added source. Key claims: Ref-GS 通过延迟高斯着色和方向分解实现反射场景的 SOTA 渲染质量和法线重建精度。
+
+## [2026-08-04] ingest | [8DNA: 8D Neural Asset Light Transport by Distribution Learning](sources/8dna-8d-neural-asset-light-transport-by-distribution-learning.md) — UCSD+NVIDIA，归一化流学习 8D 光传输，支持近场照明
+
+## [2026-08-04] ingest | [1.5万字速通LLM主流模型结构](sources/llm-architecture-overview.md) — 知乎文章，系统讲解 LLM 结构组件（Tokenizer、Norm、Attention、FFN、LM Head、MTP、MoE）
+
+## [2026-08-03] filter | 4 files processed (2 excluded)
+
 ## [2026-07-31] ingest | GlossyGS: Inverse Rendering of Glossy Objects with 3D Gaussian Splatting
 Added source. Key claims: 3D-GS 光泽物体逆渲染，法线图预滤波 + 微表面分割先验，Shiny Blender 重光照 PSNR 25.72，实时 30 FPS。
 
@@ -36,25 +86,8 @@ Added source. Key claims: 可光栅化的 SDF 框架，Delaunay 四面体化 + �
 
 ## [2026-07-29] filter | 17 files processed（含 2 篇 alphaXiv 补全：GlossyGS、RaDe-GS）
 
-
-
-
-## [2026-07-28] ingest | World Tracing: Generative Pixel-Aligned Geometry Beyond the Visible
-
 ## [2026-07-29] ingest | Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction
 Added source. Key claims: 将可学习特征锚定在基元外包的虚拟支架上，于光线交点插值并经 sin/cos 周期激活，使 alpha 混合变为谐波分量加权和，最后用轻量 MLP 延迟解码像素颜色；在 3DGS 上以更低基元数取得新视角合成 SOTA，并可无缝接入 3DGUT / 2DGS / Triangle Splatting。
-
-## [2026-07-28] ingest | Rectified Flow
-
-Added source. Key claims: Rectified Flow 通过学习直线轨迹的 ODE 实现两个分布间的传输映射，Reflow 过程进一步直化轨迹，可实现单步 Euler 生成。
-
-## [2026-07-28] ingest | Arm Neural Super Sampling
-
-Added source. Key claims: ARM 神经网络超采样项目，托管于 Hugging Face，页面返回 404 未找到。
-
-## [2026-07-28] ingest | Arm Neural Technology for Mobile Games
-
-Added source. Key claims: ARM 移动端神经网络技术官方文档，因访问受限未获取到完整内容。
 
 ## [2026-07-28] ingest | Ref-DGS: Reflective Dual Gaussian Splatting
 
@@ -99,50 +132,6 @@ Added source. Key claims: 首个从多视角图像提取神经材质的端到端
 
 Added source. Key claims: 视图无关哈希网格烘焙为纹理图集消除神经查询瓶颈；可变形 Beta 核 + 衰减减少正则化实现高稀疏度；4K@60FPS 消费级硬件实时渲染；0.14M 原语达 26.75 PSNR。
 
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-28] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-## [2026-07-27] filter | 23 files processed
-
-# Wiki Log
-
 ## [2026-07-28] ingest | TopoMesh: High-Fidelity Mesh Autoencoding via Topological Unification
 
 - Source: https://arxiv.org/abs/2603.24278
@@ -157,17 +146,19 @@ Added source. Key claims: 视图无关哈希网格烘焙为纹理图集消除神
 - Tags: 3dgs, mesh-reconstruction, material-decomposition, pbr, neural-rendering
 - Key claims: (1) 材料-网格联合优化框架，每个高斯体增加 albedo + roughness 可学习参数；(2) 多视角 NCC 粗糙度监督完全消除神经组件依赖；(3) 遮挡感知滤波 + 多视角法线一致性增强几何鲁棒性；(4) DTU CD 0.53 与 SOTA 持平，Shiny Blender 反射表面显著优于 2DGS/GOF/PGSR；(5) 训练 51min（完整版）/ 22.4min（无 BRDF 版）
 
-## [2026-07-26] ingest | Volumetric Surfaces
+## [2026-07-28] filter | 23 files processed
+
+## [2026-07-28] ingest | Volumetric Surfaces
 - Source: https://arxiv.org/abs/2409.02482
 - Category: papers
 - Tags: view-synthesis, real-time-rendering, mesh-representation, fuzzy-geometry, mobile-rendering
 
-## [2026-07-26] ingest | Adaptive Shells
+## [2026-07-28] ingest | Adaptive Shells
 - Source: https://arxiv.org/abs/2311.10091
 - Category: papers
 - Tags: NeRF, volume-rendering, implicit-surface, adaptive-sampling, real-time-rendering
 
-## [2026-07-26] ingest | Extracting Neural Materials from Multi-view Images
+## [2026-07-28] ingest | Extracting Neural Materials from Multi-view Images
 - Source: https://arxiv.org/abs/2606.26715
 - Category: papers
 - Tags: neural-materials, inverse-rendering, differentiable-rendering, material-extraction

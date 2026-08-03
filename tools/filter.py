@@ -52,6 +52,20 @@ CATEGORIES = [
 INTERESTS_FILE = REPO_ROOT / "wiki" / "interests.md"
 LOG_FILE = REPO_ROOT / "wiki" / "log.md"
 FILTER_CACHE = DIGEST_DIR / ".filter-cache.json"
+TRASH_DIR = REPO_ROOT / "raw" / ".tmp" / "deleted"
+
+
+def move_to_trash(file_path: Path, date_str: str) -> Path:
+    """Move file to raw/.tmp/deleted/YYYY-MM-DD/ instead of unlinking."""
+    dest_dir = TRASH_DIR / date_str
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / file_path.name
+    i = 1
+    while dest.exists():
+        dest = dest_dir / f"{file_path.stem}_{i}{file_path.suffix}"
+        i += 1
+    shutil.move(str(file_path), str(dest))
+    return dest
 
 
 def _apply_suggestions(suggested_interests, suggested_disinterests, log_fn=print):
@@ -173,6 +187,39 @@ def parse_interests(content: str) -> list[dict]:
     return entries
 
 
+def _load_disinterest_keywords() -> set[str]:
+    """Load exclusion keywords from wiki/interests.md (排除列表)."""
+    content = read_file(INTERESTS_FILE)
+    if not content:
+        return set()
+    entries = parse_interests(content)
+    return {k.lower() for e in entries
+            if e.get("category") == "排除列表"
+            for k in e.get("keywords", []) if k}
+
+
+def _guard_match_level(results: list[dict]) -> list[dict]:
+    """Fix LLM misclassification: not_interested requires hitting exclusion list.
+
+    `not_interested` is only allowed when the document matches 排除列表 keywords.
+    Otherwise downgrade to `no_interest_match` so the item stays in the brief
+    (compact list) and its source file is NOT moved to trash.
+    """
+    keys = _load_disinterest_keywords()
+    for r in results:
+        if r.get("match_level") != "not_interested":
+            continue
+        title = r.get("title", "")
+        text = " ".join([title, r.get("reason", ""), r.get("brief", "")]).lower()
+        if keys and any(k in text for k in keys):
+            continue
+        r["match_level"] = "no_interest_match"
+        note = " [自动修正：未命中排除列表，not_interested→no_interest_match]"
+        r["reason"] = (r.get("reason", "") + note).strip()
+        print(f"  ⚠️  修正 match_level: {title[:40]} not_interested → no_interest_match（未命中排除列表）")
+    return results
+
+
 def get_file_preview(file_path: Path, max_chars: int = 2500) -> str:
     """Get compact file preview for LLM. Papers: abstract + title. Others: first max_chars chars."""
     content = read_file(file_path)
@@ -266,7 +313,7 @@ def build_analyze_prompt(file_path: Path, interests_desc: str, disinterests_desc
 - figure_caption: 框架图/架构图的中文说明（直接在文档中寻找该图片对应的标题文字并翻译为中文，不要用"Refer to caption"）
 - domain: 所属领域
 - keywords: 关键词列表
-- match_level: 匹配程度（interested / possibly_interested / not_interested）
+- match_level: 匹配程度（interested / possibly_interested / no_interest_match / not_interested）
 - matched_interests: 匹配到的兴趣条目名称列表
 - reason: 匹配理由（必须具体，写明"文档的XXX部分讨论了XXX"）
 - brief: 3-5句中文摘要（简述核心贡献和方法）
@@ -289,9 +336,12 @@ def build_analyze_prompt(file_path: Path, interests_desc: str, disinterests_desc
 返回JSON数组，不要代码块。
 
 匹配规则（必须严格遵守）:
-- 只标记 interested 当文档核心主题与兴趣条目直接对应。关键词只是辅助，不能仅凭关键词出现就判定感兴趣
-- possibly_interested 要求文档至少30%内容与兴趣条目相关，而非仅提及
-- 宁可漏判不可误判：拿不准时标记 not_interested
+- interested: 文档核心主题与兴趣条目直接对应
+- possibly_interested: 文档至少30%内容与兴趣条目相关
+- not_interested: **仅当**文档内容明确命中「排除列表」中的条目（关键词直接匹配排除项）时使用。**不直接命中排除列表时，严禁使用此分类**
+- no_interest_match: 文档与任何兴趣条目均无直接关联——这是默认分类。**无明确不感兴趣证据时一律标记为此类**，不要因为"无直接关联"就判 not_interested
+- 宁可漏判不可误判：拿不准时标记 no_interest_match（不是 not_interested）
+- 相关性判断要宽松：文档属于兴趣领域的大方向（如渲染、光传输、神经场），即使不是严格对应的子方向（如3DGS），也应判 possibly_interested 而不是 no_interest_match
 - 不要发散猜测：不要因为标题/摘要提到了兴趣领域的上位概念就标记感兴趣（如兴趣是"3D高斯泼溅"，不要因为文档提到"3D视觉"就标记）
 - 匹配理由必须具体：写明"文档的XXX部分直接讨论了XXX兴趣条目"，而非"文档涉及相关领域"
 - 如果「兴趣」为空，matched_interests 返回空数组 []
@@ -320,7 +370,7 @@ def parse_analyze_response(raw: str, file_path: Path, source_url: str = "") -> l
         results.append({
             "file": file_path,
             "item_id": entry.get("item_id", 1),
-            "match_level": entry.get("match_level", "not_interested"),
+            "match_level": entry.get("match_level", "no_interest_match"),
             "matched_interests": entry.get("matched_interests", []),
             "reason": entry.get("reason", ""),
             "suggested_category": entry.get("suggested_category", "papers"),
@@ -336,7 +386,7 @@ def parse_analyze_response(raw: str, file_path: Path, source_url: str = "") -> l
             "suggested_new_interests": entry.get("suggested_new_interests", []),
             "suggested_new_disinterests": entry.get("suggested_new_disinterests", []),
         })
-    return results
+    return _guard_match_level(results)
 
 
 def analyze_file(file_path: Path, interests_desc: str, disinterests_desc: str = "") -> list[dict] | None:
@@ -352,7 +402,8 @@ def analyze_file(file_path: Path, interests_desc: str, disinterests_desc: str = 
     source_url = extract_source_url(file_path)
 
     try:
-        raw = call_llm(prompt, max_tokens=4096)
+        tid = str(file_path.relative_to(REPO_ROOT)).replace("/", "_").replace("\\", "_")
+        raw = call_llm(prompt, max_tokens=4096, task_id=tid)
     except Exception as e:
         print(f"  ⚠️  LLM call failed for {file_path.name}: {e}")
         raise RuntimeError(f"LLM analysis failed for {file_path.name}")
@@ -668,12 +719,18 @@ def _figure_url_ok(url: str) -> bool:
 
 
 def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
-    """Generate the brief.md content from analysis results."""
+    """Generate the brief.md content from analysis results.
+
+    Match levels:
+    - interested / possibly_interested → body sections
+    - no_interest_match → no matching interests, compact list (not archived)
+    - not_interested → excluded, moved to trash, NOT in brief
+    """
     today = date_str or date.today().isoformat()
     lines = [f"# 资讯简报  {today}\n"]
     lines.append("")
 
-    # Group by match level (skip not_interested)
+    # Group by match level (body: interested/possibly_interested only)
     groups = {
         "interested": ("## [感兴趣]", "## [感兴趣]"),
         "possibly_interested": ("## [可能感兴趣]", "## [可能感兴趣 — 部分匹配/主题相关]"),
@@ -739,14 +796,14 @@ def generate_brief_entries(results: list[dict], date_str: str = None) -> str:
                 lines.append(item['detailed_report'])
                 lines.append("")
 
-    # Append excluded items as a compact list
-    excluded = [r for r in results if r["match_level"] == "not_interested"]
-    if excluded:
+    # Append no_interest_match items as compact list (interest list has no info about them)
+    no_match = [r for r in results if r["match_level"] == "no_interest_match"]
+    if no_match:
         lines.append("---")
         lines.append("")
-        lines.append("## [已排除]")
+        lines.append("## [无相关信息 — 兴趣列表中无对应条目]")
         lines.append("")
-        for r in excluded:
+        for r in no_match:
             title = r.get("title") or (r["file"].name if isinstance(r["file"], Path) else str(r["file"]))
             reason = r.get("reason", "").strip()
             src = r.get("source_url", "")
@@ -933,7 +990,7 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
 
         results.append({
             "file": abs_path,
-            "match_level": entry.get("match_level", "not_interested"),
+            "match_level": entry.get("match_level", "no_interest_match"),
             "matched_interests": entry.get("matched_interests", []),
             "reason": entry.get("reason", ""),
             "suggested_category": entry.get("suggested_category", "papers"),
@@ -949,6 +1006,8 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
             "suggested_new_interests": entry.get("suggested_new_interests", []),
             "suggested_new_disinterests": entry.get("suggested_new_disinterests", []),
         })
+
+    results = _guard_match_level(results)
 
     # Collect suggestions from results (build-brief path has no auto LLM pass)
     suggested_interests = []
@@ -1003,7 +1062,12 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
         # Move source files
         for item in results:
             fp = item["file"]
-            if isinstance(fp, Path) and fp.exists():
+            if not isinstance(fp, Path) or not fp.exists():
+                continue
+            if item["match_level"] == "not_interested":
+                trash_dest = move_to_trash(fp, today)
+                print(f"  🗑️  移入回收站（明确排除）: {fp.name} → {trash_dest.relative_to(REPO_ROOT)}")
+            else:
                 try:
                     source_dest = move_source(fp, today)
                     print(f"  📦 {fp.name} → {source_dest.relative_to(REPO_ROOT)}")
@@ -1040,6 +1104,12 @@ def build_brief_from_json(results_json_path: str, dry_run: bool = False):
     brief_count = len([r for r in results if r["match_level"] != "not_interested"])
     log_entry = f"## [{today}] filter | {len(results)} files processed"
     append_log(log_entry)
+
+    # 清理 checkpoint cache（与 run_filter 成功路径一致，防止残留）
+    if not dry_run and FILTER_CACHE.exists():
+        FILTER_CACHE.unlink()
+        print("  🧹 已清理缓存")
+
     print(f"\n✅ 筛选完成！简报: {BRIEF_FILE.relative_to(REPO_ROOT)}")
 
 
@@ -1050,12 +1120,26 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
 
     files = []
+    seen_names: dict[str, Path] = {}
     for f in INBOX_DIR.rglob("*"):
         if f.name == "inbox.md":
             continue
         if f.is_file() and f.suffix.lower() in {".md", ".pdf", ".txt", ".html", ".docx", ".pptx", ".xlsx"}:
-            files.append(f)
-    files.sort()
+            prev = seen_names.get(f.name)
+            if prev is None:
+                seen_names[f.name] = f
+                continue
+            # 同名重复：保留日期子目录中一份，删除 root 残留（防 8 次处理变 4 次问题）
+            f_in_sub = f.parent != INBOX_DIR
+            prev_in_sub = prev.parent != INBOX_DIR
+            if f_in_sub and not prev_in_sub:
+                prev.unlink(missing_ok=True)
+                seen_names[f.name] = f
+                print(f"  🔄 去重: 删除 root 残留 {prev.name}")
+            elif prev_in_sub and not f_in_sub:
+                f.unlink(missing_ok=True)
+                print(f"  🔄 去重: 删除 root 残留 {f.name}")
+    files = sorted(seen_names.values())
 
     if not files:
         print("inbox/ 中没有可筛选的文件。")
@@ -1172,24 +1256,20 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
         # ── Phase 2: read results from subagents ──
         if "--phase2" in sys.argv:
             results_map = read_results()
-            for fp, rel in pending:
-                tid = rel.replace("/", "_").replace("\\", "_")
-                raw = results_map.get(tid, "")
+            for tid, raw in results_map.items():
+                rel = tid.replace("/", "_").replace("\\", "_").replace("_", "/")
+                fp = (REPO_ROOT / rel).resolve()
                 if not raw:
-                    print(f"  ⚠️  {fp.name}: 无结果")
-                    failed_files.add(rel)
                     continue
                 try:
-                    file_results = parse_analyze_response(raw, fp, extract_source_url(fp))
-                    serialized = []
-                    for r in file_results:
-                        item = dict(r)
-                        item["file"] = rel
-                        serialized.append(item)
+                    src_url = extract_source_url(fp) if fp.exists() else ""
+                    file_results = parse_analyze_response(raw, fp, src_url)
+                    serialized = [dict(r) | {"file": rel} for r in file_results]
                     cache[rel] = serialized
                     save_filter_cache(cache)
+                    print(f"  ℹ️  结果来源: cache (phase2 result) - {rel}")
                 except Exception as e:
-                    print(f"  ⚠️  {fp.name} parse failed: {e}")
+                    print(f"  ⚠️  {rel} parse failed: {e}")
                     failed_files.add(rel)
             if "--keep-phase2-results" not in sys.argv:
                 clean_task_dirs()
@@ -1224,20 +1304,11 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
                         print(f"  ⚠️  {fp.name} failed: {e}")
                         failed_files.add(rel)
 
-            # call_llm 返回空 → 模式1/2，写 task 统一交 agent 处理
+            # call_llm 返回空 → 模式1/2，任务已由 call_llm 按统一路径 ID 写入 TASK_DIR
             if needs_agent:
-                tasks = []
-                for fp, rel in pending:
-                    prompt = build_analyze_prompt(fp, interests_desc, disinterests_desc)
-                    tasks.append({
-                        "id": rel.replace("/", "_").replace("\\", "_"),
-                        "prompt": prompt,
-                        "max_tokens": 4096,
-                        "metadata": {"file": rel, "title": fp.stem},
-                    })
-                prepare_tasks(tasks)
-                print(f"\n📝 检测到模式1/2（call_llm 返回空），已写入 {len(tasks)} 个分析任务到 {TASK_DIR}")
-                print("   请让 agent 处理这些任务，然后运行:")
+                print(f"\n📝 检测到模式1/2（call_llm 返回空），分析任务已按统一 ID 写入 {TASK_DIR}")
+                print("   请 agent 处理每个 task，并用 _utils.write_result(\"<任务ID>\", json) 写入结果")
+                print("   完成后运行:")
                 print(f"     python tools/filter.py --phase2")
                 return  # Skip cleanup — inbox stays untouched
     # Rebuild full results from cache (skips cached failures)
@@ -1290,13 +1361,17 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
             inject_source_url(fp, r['source_url'])
             injected.add(fp)
 
-    # Sort: interested > possibly_interested > not_interested
-    priority = {"interested": 0, "possibly_interested": 1, "not_interested": 2}
-    results.sort(key=lambda x: priority.get(x["match_level"], 3))
+    # Sort: interested > possibly_interested > no_interest_match > not_interested
+    priority = {"interested": 0, "possibly_interested": 1, "no_interest_match": 2, "not_interested": 3}
+    results.sort(key=lambda x: priority.get(x["match_level"], 4))
 
     # Generate new entries markdown
     today = date.today().isoformat()
     new_entries = generate_brief_entries(results, today)
+
+    # 确认每个结果来源，排查旧结果残留
+    for r in results:
+        print(f"  ℹ️  结果来源: {r['match_level']:<20} {r['title']}")
 
     if not dry_run:
         if BRIEF_FILE.exists() and BRIEF_FILE.stat().st_size > 50:
@@ -1318,13 +1393,28 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
             write_file(BRIEF_FILE, new_entries)
 
         for item in results:
-            if item["file"].exists():
-                print(f"  移动: {item['file'].name} → sources/{today}/")
+            fp = item["file"]
+            if not fp.exists():
+                continue
+            if item["match_level"] == "not_interested":
+                # 明确不感兴趣：移入回收站，不归档
+                trash_dest = move_to_trash(fp, today)
+                print(f"  🗑️  移入回收站（明确排除）: {fp.name} → {trash_dest.relative_to(REPO_ROOT)}")
+            else:
+                # 感兴趣 / 可能感兴趣 / 无相关信息 → 归档到 sources
+                print(f"  移动: {fp.name} → sources/{today}/")
                 try:
-                    source_dest = move_source(item["file"], today)
+                    source_dest = move_source(fp, today)
                     print(f"    ✅ {source_dest}")
                 except Exception as e:
                     print(f"    ⚠️  move failed: {e}")
+
+        # 打印回收站摘要
+        trashed = [r["file"].name for r in results if r["match_level"] == "not_interested" and r["file"].exists()]
+        if trashed:
+            print(f"\n  🚫 不感兴趣 {len(trashed)} 个，已移入回收站 raw/.tmp/deleted/{today}/:")
+            for name in trashed:
+                print(f"    - {name}")
 
         if not failed_files:
             processed_urls = {r.get("source_url", "") for r in results if r.get("source_url")}
@@ -1339,8 +1429,11 @@ def run_filter(dry_run: bool = False, json_output: bool = False):
             print("  🧹 已清理缓存")
 
     # Log
-    brief_count = len([r for r in results if r["match_level"] != "not_interested"])
+    brief_count = len([r for r in results if r["match_level"] in ("interested", "possibly_interested")])
+    no_match = len([r for r in results if r["match_level"] == "no_interest_match"])
     log_entry = f"## [{date.today().isoformat()}] filter | {len(results)} files processed"
+    if no_match:
+        log_entry += f" ({no_match} no_interest_match)"
     if disinterested_count:
         log_entry += f" ({disinterested_count} excluded)"
     if failed_files:

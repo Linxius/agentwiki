@@ -33,6 +33,7 @@ This wiki is maintained entirely by your coding agent. No API key needed — jus
 | `status` / `流程状态` | 检查各节点进度并建议下一步 | — |
 | `fetch sources` / `抓取源文件` | 抓取 brief 中缺失的源文件 | — |
 | `fetch alphaxiv` / `补充 alphaXiv` | 用 alphaXiv HTTP overview / MCP 获取下载失败的论文全文 | 见下方 #arXiv 下载失败自动处理 |
+| `health` / `健康检查` | 运行 `python tools/health.py --fix` | 自动修复 index 同步、概述同步；清理陈旧条目，登记 stub 页面 |
 
 Agent 主动提醒（完整列表见 `triggers.md` #Agent 主动提醒）：inbox 待处理、filter 待执行、deep-read 待生成、ingest 待合入、feeds 过期、源文件缺失、arxiv 下载失败需 alphaXiv 补充。
 
@@ -128,9 +129,21 @@ tools/        inbox.py filter.py deep-read.py ingest.py status.py health.py lint
 | Ingest（合入） | `ingest` / `ingest from digest` | [docs/workflows/ingest.md](docs/workflows/ingest.md) |
 | Code Reading（代码走读） | `read code` | [docs/workflows/code-read.md](docs/workflows/code-read.md) |
 | Lint（内容质检） | `lint` | [docs/workflows/lint.md](docs/workflows/lint.md) |
-| Health（结构检查） | `health` | 直接运行 `python tools/health.py` |
+| Health（结构检查） | `health` / `health --fix` | 直接运行 `python tools/health.py` |
 | Graph（知识图谱） | `build graph` | [docs/workflows/graph.md](docs/workflows/graph.md) |
 | Query（问答） | `query: <question>` | 读 wiki/index.md → 读对应页面 → 合成回答 |
+
+### Health 自动修复
+
+`health.py` 自动修复策略（零 LLM 调用，纯确定性）：
+
+- **默认行为**（无 `--fix`）：
+  - 自动修复 index 缺失条目（`sync-index.py --write`，增量安全）
+  - 自动修复 overview 同步（`sync-overview.py --write`，保留手动段）
+- **`--fix` 模式**（额外执行）：
+  - 清理 index stale 条目（`sync-index.py --prune`，删除操作）
+  - 登记 stub 页面到 `wiki/issues.md`（幂等，不生成内容）
+- **不修复**：log 缺失（伪造日志风险）、stub 内容补全（需 LLM，属 `lint.py` 职责）
 
 ## Page Format
 

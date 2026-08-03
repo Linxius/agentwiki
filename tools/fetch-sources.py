@@ -92,7 +92,7 @@ def fetch_arxiv(arxiv_id: str, out_path: Path) -> bool:
 
 
 def fetch_web(url: str, out_path: Path) -> bool:
-    """Fetch web page via requests + trafilatura."""
+    """Fetch web page via requests + trafilatura, fallback to r.jina.ai for anti-bot sites."""
     try:
         import requests
         import trafilatura
@@ -113,7 +113,17 @@ def fetch_web(url: str, out_path: Path) -> bool:
         header = f"# {title}\n\n**URL**: {url}\n\n" if title else f"**URL**: {url}\n\n"
         write_file(out_path, header + md)
         return True
-    except Exception:
+    except Exception as e:
+        print(f"  ⚠️  fetch_web 直连失败 ({e}) → r.jina.ai")
+        try:
+            import requests
+            j = requests.get(f"https://r.jina.ai/{url}", timeout=60)
+            if j.status_code == 200 and len(j.text) > 200 and "Markdown Content:" in j.text:
+                md = j.text.split("Markdown Content:", 1)[-1].strip()
+                write_file(out_path, md)
+                return True
+        except Exception as e2:
+            print(f"  ⚠️  r.jina.ai fallback 失败: {e2}")
         return False
 
 

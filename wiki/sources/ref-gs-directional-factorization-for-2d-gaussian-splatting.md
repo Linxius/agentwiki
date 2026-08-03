@@ -1,121 +1,179 @@
 ---
 title: "Ref-GS: Directional Factorization for 2D Gaussian Splatting"
-type: source
-tags: [paper, 3dgs, 2dgs, reflection, deferred-rendering, sph-mip, directional-encoding]
-date: 2026-07-31
-source_file: raw/papers/Ref-GS-Directional-Factorization-for-2D-Gaussian-Splatting.md
+type: paper
+tags: [Gaussian Splatting, Deferred Rendering, Directional Encoding, Inverse Rendering, Spherical Mip-Grid, 2DGS]
+date: 2026-08-04
+source_file: raw/papers/arxiv-2412.00905.md
 url: https://arxiv.org/abs/2412.00905
-venue: "CVPR 2025"
-published: 2025
-links:
-  - https://github.com/YoujiaZhang/Ref-GS
+links: []
 ---
 
 ## Summary
-Ref-GS 提出了一种面向反射场景的延迟渲染高斯泼溅方法，将 3DGS 扩展至反射/镜面场景。核心创新包括：Sph-Mip 编码（捕获不同尺度的表面粗糙度）、延迟渲染（推迟视角相关颜色计算到表面法线确定后）、方向分解（通过向量外积连接几何和光照）。这四个核心组件共同解决了反射场景重建中的几何/外观歧义问题，在 ShinySynthetic 和 GlossySynthetic 上表面重建和新视角合成达到 SOTA，训练仅 12.6 分钟。
+
+本文提出 **Ref-GS**，一种基于 2D 高斯泼溅（2DGS）的延迟渲染方法，解决视角相关效果与几何重建之间的歧义问题。核心方法是将高斯属性混合后再进行方向编码（deferred shading），引入 Spherical Mip-grid（Sph-Mip）捕获表面粗糙度，并通过向量外积实现几何-光照分解。该方法在反射场景上实现了照片级真实的视角相关渲染，同时保持精确的几何重建，在 Shiny Blender 和 Shiny Real 数据集上均达到 SOTA 表现。
 
 ## 原始出处
-- 原始文件: [raw/papers/Ref-GS-Directional-Factorization-for-2D-Gaussian-Splatting.md](../../raw/papers/Ref-GS-Directional-Factorization-for-2D-Gaussian-Splatting.md)
+
+- 原始文件: [raw/papers/arxiv-2412.00905.md](../../raw/papers/arxiv-2412.00905.md)
 - 原文链接: [https://arxiv.org/abs/2412.00905](https://arxiv.org/abs/2412.00905)
-- Brief 条目: [brief.md 2026-07-30 > CVPR 2025 2412.00905 Ref-GS 反射高斯泼溅](../digest/brief.md)
+- Brief 条目: [brief.md](#) — 2026-08-04 digest 条目 1
+- 深度阅读报告: N/A
 
 ## Key Contributions
-- **方向编码方法**：基于延迟渲染的高斯泼溅方向编码，有效减少方向和视角的歧义
-- **Sph-Mip 编码**：捕获不同尺度的表面粗糙度，实现粗糙度感知的高斯着色
-- **几何-光照分解**：通过向量外积连接几何和光照，显著降低渲染器开销
-- **消融实验**：系统分析四个核心组件的贡献
+
+1. **延迟高斯着色（Deferred Gaussian Shading）**：将高斯属性混合后在图像空间进行着色，而非逐基元着色，有效减少法线-视角歧义，产生更精确的镜面反射和表面重建。
+2. **方向分解（Directional Factorization）**：通过空间特征与方向特征的外积 $\mathbf{k} \otimes \mathbf{s}$ 实现几何-光照分解，降低每个高斯基元的特征通道数，减少体积渲染计算开销。
+3. **Sph-Mip 编码**：基于经纬度网格的多级球面特征金字塔，通过粗糙度维度插值捕获不同尺度的表面粗糙度，实现远场光照建模。
 
 ## Method
 
-### 整体架构概览
-反射和折射等视角相关效果是 3D 重建和渲染的关键元素，但在神经场（NeRF 和 3DGS）中受到严重忽视。直接应用视图方向反射到 3DGS 是有问题的，因为模型方向和 SH 颜色独立继承，每个基元的视图方向变换容易在参数更新中被偏移。Ref-GS 的核心思路：采用延迟渲染技术，推迟视角相关颜色计算到高斯属性混合和表面法线估计之后，只对估计的表面进行方向编码，有效减少方向-视角歧义。
+### 框架图
 
-### 组件 1：延迟渲染（Deferred Shading）
-- **直觉**：传统 3DGS 对每个高斯独立查询视图相关颜色，但反射场景的颜色取决于表面法线和视角的相对关系。先确定表面几何，再计算着色，避免方向-视角歧义。
-- **细节**：
-  - 传统方法：高斯颜色 = f(视图方向, 基元方向, SH 系数)
-  - Ref-GS：先混合高斯属性（位置、法线、粗糙度），得到像素处表面属性，再计算颜色
-  - G-buffer 存储：法线、粗糙度、反照率、金属度
-  - 第二 pass：用 G-buffer 属性查询 Sph-Mip 编码，计算最终颜色
+```
+[Ref-GS 渲染管线]
 
-### 组件 2：Sph-Mip 编码
-- **直觉**：表面粗糙度在不同观测尺度下呈现不同外观（远距离看光滑，近距离看粗糙）。需要多尺度编码来捕捉这种变化。
-- **细节**：
-  - 设计球形 Mip-grid，存储不同粗糙度层级的外观特征
-  - 9 层 mipmap，每层对应不同粗糙度尺度
-  - 查询：根据像素处粗糙度选择合适层级的 mipmap
-  - 避免粗糙表面几何重建失败（消融实验证明）
+[Geometry Pass - 几何传递]
+  2D 高斯基元 → 光栅化 → G-Buffer
+    ├─ 漫反射颜色 I_d
+    ├─ 空间特征 K (H×W×D)
+    ├─ 粗糙度图 M (H×W×1)
+    └─ 法线图 N (H×W×3)
+            ↓
+[Lighting Pass - 光照传递]
+  对每个像素 (u,v):
+    1. 从 N 计算反射方向 ω_r
+    2. ω_r → 球坐标 (θ,φ)
+    3. Sph-Mip(ω_r, ρ, M) → 方向特征 S
+    4. K ⊗ S → 高维中间张量
+            ↓
+[Rendering Pass - 着色传递]
+  I = I_d + f_Θ(S, K⊗S)
+  γ-tone mapping → sRGB
+```
 
-### 组件 3：方向分解（Directional Factorization）
-- **直觉**：反射颜色可以分解为几何（法线）和光照（视图方向）的外积，这种分解减少参数量并提高泛化能力。
-- **细节**：
-  - 几何向量 K：从 G-buffer 的法线编码得到
-  - 光照向量 S：从视图方向和环境贴图编码得到
-  - 反射颜色 = K ⊗ S（外积）+ 偏置项
-  - 消融实验：不做方向分解，近场相互反射直接消失
+### 双重写作
 
-### 组件 4：2DGS 替换 3DGS
-- **直觉**：2DGS 的薄表面建模更适合反射场景的几何重建。
-- **细节**：
-  - 将 3DGS 替换为 2DGS（2D 高斯约束在局部切平面上）
-  - 薄表面表示更准确地捕捉几何细节
-  - 消融实验：PSNR 从 33.20 降到 32.77，证明 2DGS 更有利
+**问题**：在 3DGS 和 2DGS 中，每个基元独立查询 SH 系数得到视角相关颜色，然后进行前向累积。在反射场景中，这种方法的视角相关颜色与基元法线的耦合会产生歧义——改变 SH 系数可以等效抵消视角方向变换，导致高频率反射和法线重建不准确。
+
+**解决思路**：借鉴计算机图形学中的延迟着色（deferred shading），先渲染几何属性到 G-buffer，再在屏幕空间进行着色。这样视角相关颜色是在混合后的表面上评估，而非单个基元上，消解了 SH 系数与基元方向的歧义。
+
+**具体方法**：
+
+**1. 延迟高斯着色**
+
+将每个基元的属性（漫反射颜色 $\mathbf{c}_d$、特征 $\mathbf{f}$、粗糙度 $\rho$）沿射线进行 alpha 混合：
+
+$$\mathbf{I} = \mathbf{I}_d + f_{\Theta}(\mathbf{S}, \mathbf{K} \otimes \mathbf{S})$$
+
+其中 $\mathbf{K}$ 是通过基元特征 $\mathbf{f}_i$ alpha 混合得到的空间特征图，$\mathbf{S}$ 是从 Sph-Mip 查询的方向特征图，$\otimes$ 是逐像素外积。
+
+**2. 方向分解**
+
+受 TensoRF 启发，使用向量外积 $\mathbf{s} \circ \mathbf{k}$ 表示视角相关效应。空间特征 $\mathbf{k} \in \mathbb{R}^D$ 和方向特征 $\mathbf{s} \in \mathbb{R}^C$ 通过外积组合为块矩阵，展平后输入轻量 MLP 解码器得到最终颜色。这种分解显式地将几何（空间特征）和光照（方向特征）分离。
+
+**3. Sph-Mip 编码**
+
+在球面上使用经纬度网格分布特征点，展开为 2D 特征网格。反射方向 $\omega_r$ 通过球坐标 $(\theta, \phi)$ 映射到网格 XY 轴，粗糙度 $\rho$ 对应 Z 轴。通过多级 mipmap（9 级，基础分辨率 $512 \times 1024 \times 16$）和粗糙度维度的三线性插值，高效查询方向特征。
 
 ## Training
-- **目标函数**：L1 重建损失 + SSIM 损失 + 法线损失 + 平滑正则
-- **训练策略**：
-  - 阶段 1：初始化 2DGS 高斯（使用 COLMAP 点云）
-  - 阶段 2：优化几何和材质属性
-  - 阶段 3：微调 Sph-Mip 编码和方向分解参数
-- **训练时间**：约 12.6 分钟（V100 GPU），远快于 NeRF 类方法
+
+- **框架**：PyTorch + Nvdiffrast
+- **GPU**：单张 Tesla V100 32GB
+- **优化器**：Adam，30,000 次迭代
+- **优化参数**：MLP $f_\Theta$、mipmap $\mathcal{M}$、每个 2D 高斯的位置/缩放/旋转/不透明度/漫反射颜色/粗糙度/特征
+- **损失函数**：$\mathcal{L} = \mathcal{L}_{\text{rgb}} + \lambda_d \mathcal{L}_{\text{d}} + \lambda_n \mathcal{L}_{\text{n}}$，其中 $\mathcal{L}_{\text{rgb}} = (1-\lambda)\mathcal{L}_1 + \lambda\mathcal{L}_{\text{D-SSIM}}$（$\lambda=0.2$），$\lambda_d=100$，$\lambda_n=0.05$
+- **MLP 架构**：1 隐藏层 256 神经元，ReLU 激活
+- **Sph-Mip 分辨率**：基础级 $H_\mathcal{M}=512, W_\mathcal{M}=1024, C=16$，共 9 级
 
 ## Results & Comparisons
-### 消融实验（Shiny Blender + NeRF Synthetic 四项核心组件消融）
 
-| 消融项 | 去掉什么 | PSNR | MAE° (法线误差) | 结论 |
-| --- | --- | --- | --- | --- |
-| **w/o Sph-Mip** | 不用 Sph-Mip 编码，直接把 G-buffer 喂给 MLP | 29.95 | 3.61° | 高频率反射细节完全出不来 |
-| **w/o mipmap** | 把 Sph-Mip 的 9 层 mipmap 换成单层 2D 特征图 | 30.12 | 5.12° | 粗糙表面几何重建失败 |
-| **w/o DS** | 不做延迟渲染，退回标准体渲染 | 31.79 | 2.57° | 镜面反射不准确 |
-| **w/o K ⊗ S** | 不做方向分解的外积操作 | 33.37 | 2.38° | 近场相互反射直接消失 |
-| **Ours (完整)** | — | **34.00** | **2.21°** | 所有组件一起上效果最好 |
+### 数据集
 
-四个消融核心发现：
-1. **延迟渲染（w/o DS）贡献最大**——PSNR 掉 2.2 个点，把方向查询推迟到图像空间是解决歧义的关键
-2. **Sph-Mip 贡献第二大**——PSNR 掉 4 个点，法线误差从 2.21° 跳到 3.61°
-3. **mipmap 多层级对几何影响最大**——法线误差飙升到 5.12°，是所有消融中最差的几何结果
-4. **方向分解（K ⊗ S）对近场反射最关键**——PSNR 掉 0.6，但近场相互反射直接消失
+- **Shiny Blender**：合成反射物体数据集（Car, Ball, Helmet, Teapot, Toaster, Coffee）
+- **Shiny Real**：真实世界反射场景（Gardenspheres, Sedan, Toycar）
+- **NeRF Synthetic**：通用物体数据集
+- **Glossy Synthetic**：光泽物体数据集
+- **Glass & Ball**：透明折射物体数据集
 
-补充实验（消融 3DGS 替换 2DGS）：PSNR 从 33.20 降到 32.77，证明 2DGS 的薄表面建模更有利于反射场景。
+### Shiny Blender + Shiny Real 对比
+
+| 方法 | Shiny Blender Avg PSNR | Shiny Real Avg PSNR | Shiny Blender Avg SSIM | Shiny Real Avg SSIM |
+|------|----------------------|-------------------|----------------------|-------------------|
+| Ref-NeRF | 32.32 | 23.62 | 0.956 | 0.646 |
+| 3DGS-DR | 33.94 | 23.80 | 0.971 | 0.659 |
+| **Ours** | **34.80** | **24.44** | **0.973** | **0.682** |
+
+### LPIPS 对比（越低越好）
+
+| 方法 | Shiny Blender Avg | Shiny Real Avg |
+|------|-------------------|----------------|
+| 3DGS-DR | 0.059 | 0.236 |
+| **Ours** | **0.056** | **0.224** |
+
+### 法线估计精度（MAE°，越低越好）
+
+| 方法 | Shiny Blender Avg |
+|------|------------------|
+| 3DGS-DR | 2.43° |
+| **Ours** | **2.21°** |
+
+### 训练与渲染速度（相对 3DGS = 1.0）
+
+| 方法 | 渲染速度 | 训练时间 |
+|------|---------|---------|
+| 3DGS | 1.00× | 1.00× |
+| GaussianShader | 0.17× | 11.05× |
+| 3DGS-DR | 0.93× | 3.25× |
+| **Ours** | **0.37×** | **2.63×** |
+
+### 消融实验
+
+| 变体 | PSNR | SSIM | LPIPS | MAE° |
+|------|------|------|-------|------|
+| w/o Sph-Mip | 29.95 | 0.943 | 0.090 | 3.61 |
+| w/o mipmap | 30.12 | 0.945 | 0.091 | 5.12 |
+| w/o Deferred Shading | 31.79 | 0.957 | 0.062 | 2.57 |
+| w/o K⊗S | 33.37 | 0.966 | 0.051 | 2.38 |
+| **Full** | **34.00** | **0.969** | **0.046** | **2.21** |
 
 ## Related Work Analysis
-与现有反射场景重建方法相比：
-- **Ref-NeRF**：使用反射编码替代 NeRF 的方向参数化，但基于隐式表示，训练慢；Ref-GS 基于 3DGS，训练快且实时渲染
-- **DeferredGS**：使用延迟渲染管线，但未考虑方向分解和 Sph-Mip 编码；Ref-GS 的四个组件组合实现更好的效果
-- **EnvGS**：使用独立的环境高斯建模反射，但假设远场光照；Ref-GS 的 Sph-Mip 编码支持近场反射
+
+- **Ref-NeRF**：将 IDE（Integrated Directional Encoding）引入 NeRF，用反射方向替代视角方向查询。但依赖 MLP 表示几何，训练和渲染较慢。
+- **GaussianShader**：将 3DGS 与 PBR 着色器结合，显式建模视角相关效应，但无法处理近场照明。
+- **3DGS-DR**：在 3DGS 中引入延迟着色进行反射建模，但同样难以精确建模近场照明。
+- **3iGS**：使用张量分解优化入射光照，但在近场照明建模上仍有局限。
+- **2DGS**：Ref-GS 的基础，采用 2D 定向圆盘作为表面元，提供更精确的表面重建。
 
 ## Ablations
-参见 Results 表格，四项核心组件的消融实验系统分析了各组件贡献。
+
+1. **Sph-Mip 编码**：移除后 PSNR 从 34.00 降至 29.95，LPIPS 从 0.046 升至 0.090，说明 Sph-Mip 对高频视角相关外观建模至关重要。
+2. **Mipmap 多级策略**：移除 mipmap 后粗糙表面重建失败并出现伪影（PSNR 30.12 vs 34.00），因为真实场景通常不是单一材质。
+3. **延迟着色**：移除后镜面反射质量下降（PSNR 31.79 vs 34.00），法线估计误差增大（2.57° vs 2.21°）。
+4. **方向分解**：移除 K⊗S 后近场互反射无法重建（PSNR 33.37 vs 34.00）。
 
 ## Limitations
-- 假设远场光照，难以处理近场互反射（虽有 K ⊗ S 缓解但仍有限）
-- 对凹面与互反射建模不足，复杂凹面几何易出错
-- Sph-Mip 编码增加存储开销（9 层 mipmap）
-- 延迟渲染需要双 pass，实现复杂度增加
+
+1. **渲染速度**：相比 2DGS 较慢（37% 基准速度），因为 MLP 解码器增加了计算开销。
+2. **难以集成到标准 CG 引擎**：依赖神经解码器，需要通过 textured mesh baking 等技术转换。
+3. **高维特征开销**：K⊗S 外积产生 H×W×(D×C) 维中间张量（H×W×64），需要一定显存。
 
 ## 评论与启示
-- **延迟渲染对反光有效**：对每个高斯做 shading 相当于从多个反射方向采样环境光，再把颜色 α-blending 加权平均，导致高光模糊了；先把所有高斯的法线做 α-blending，得到像素处的表面法线，用这个表面法线做 shading，只从一个反射方向采样环境光
-- **Sph-Mip 是粗糙度的关键**：多尺度编码捕捉不同观测尺度下的粗糙度外观，单层特征无法替代
-- **2DGS 更适合反射场景**：薄表面建模提供更准确的几何，利于反射效果重建
-- **方向分解外积是近场反射的核心**：不做方向分解，近场相互反射直接消失
-- 评论来源：brief 用户评论 + 消融实验分析
+
+1. **延迟着色在神经渲染中的有效性**：Ref-GS 证明将传统 CG 的延迟着色引入 3DGS 可以有效解决视角-法线歧义问题，这一思想可能推广到其他基于基元的表示方法。
+2. **外积分解的简洁性**：用简单的向量外积代替复杂的多层交互，既实现了几何-光照分解又降低了特征通道数，体现了低秩分解在神经渲染中的普遍价值。
+3. **球面 Mip 网格的创新**：将 mipmap 思想引入球面特征网格，通过粗糙度维度实现多尺度视角相关外观建模，为远场光照表示提供了新思路。
 
 ## Connections
-- [[3D Gaussian Splatting|3dgs]] — 本文是 3DGS 的反射扩展
-- [[2D Gaussian Splatting|2dgs]] — 使用 2DGS 替代 3DGS 获得更好几何
-- [[Deferred Rendering|deferred-rendering]] — 延迟渲染技术解决方向-视角歧义
-- [[Cook-Torrance BRDF|cook-torrance]] — 基于物理的着色模型
-- [[GlossyGS|glossygs]] — 同为光泽物体逆渲染方法，但 GlossyGS 使用法线图预滤波 + 微表面分割先验
+
+- [[2DGS]] — 2D 高斯泼溅基础方法
+- [[3DGS-DR]] — 延迟着色的 3DGS 反射建模
+- [[GaussianShader]] — 3DGS 与 PBR 着色器结合
+- [[Ref-NeRF]] — NeRF 中的反射建模先驱
+- [[3iGS]] — 张量分解的光照优化
+- [[Spherical Harmonics]] — 球谐函数在神经渲染中的应用
+- [[Deferred Shading]] — 计算机图形学中的延迟着色技术
+- [[TensoRF]] — 张量分解的神经表示
 
 ## Contradictions
-- 无明显矛盾
+
+- 无直接矛盾。Ref-GS 在 Shiny Blender 和 Shiny Real 数据集上均优于 3DGS-DR 和其他基线方法。

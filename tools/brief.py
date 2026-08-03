@@ -32,6 +32,13 @@ def parse_entries(content: str) -> list[dict]:
     """Parse brief.md into entry dicts with position and state."""
     lines = content.split('\n')
     entries = []
+    
+    # Extract date from brief header (e.g. "# 资讯简报  YYYY-MM-DD")
+    brief_date = ''
+    header_match = re.search(r'#\s+资讯简报\s+(\d{4}-\d{2}-\d{2})', content[:200])
+    if header_match:
+        brief_date = header_match.group(1)
+
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -55,6 +62,8 @@ def parse_entries(content: str) -> list[dict]:
             dm = DATE_FROM_SOURCE_RE.search(src_path)
             if dm:
                 entry_date = dm.group(1)
+            elif brief_date:
+                entry_date = brief_date
 
             entries.append({
                 'start': i,
@@ -155,7 +164,11 @@ def _empty_brief(today: str = '') -> str:
 
 
 def run_archive(force_date: str = None) -> list[str]:
-    """Archive completed entries by date. Returns list of archived date strings."""
+    """Archive completed entries by date. Returns list of archived date strings.
+    
+    Each entry is archived independently: if is_ingested or is_disinterested,
+    it gets archived regardless of other entries' status.
+    """
     if not BRIEF_FILE.exists():
         print("brief.md not found.")
         return []
@@ -168,32 +181,32 @@ def run_archive(force_date: str = None) -> list[str]:
     if not entries:
         return []
 
-    groups = group_by_date(entries)
-
-    # Separate terminal vs keep, and archive-vs-delete within terminal
+    # Separate entries: archive / delete / keep (per-entry granularity)
     to_archive: dict[str, list[dict]] = {}
     to_delete: list[dict] = []
     keep: list[dict] = []
 
-    for d, group in groups.items():
-        if d == '_nodate':
-            keep.extend(group)
+    for e in entries:
+        d = e['date'] or '_nodate'
+        
+        # Skip entries without a date unless force_date is set
+        if d == '_nodate' and not force_date:
+            keep.append(e)
             continue
-        all_done = all(is_terminal(e) for e in group)
-        forced = force_date == d
-        if all_done or forced:
-            archive_entries = [e for e in group if is_archivable(e)]
-            delete_entries = [e for e in group if e['is_ignored']]
-            if archive_entries:
-                to_archive[d] = archive_entries
-            to_delete.extend(delete_entries)
-            if forced and not all_done:
-                keep.extend(e for e in group if not is_terminal(e))
+        
+        if force_date and d != force_date:
+            keep.append(e)
+            continue
+        
+        if is_archivable(e):
+            to_archive.setdefault(d, []).append(e)
+        elif e['is_ignored']:
+            to_delete.append(e)
         else:
-            keep.extend(group)
+            keep.append(e)
 
     if not to_archive and not to_delete:
-        print("  No completed date groups to archive.")
+        print("  No completed entries to archive.")
         return []
 
     lines = content.split('\n')

@@ -10,7 +10,44 @@ This file is maintained by the LLM. Updated on every ingest.
 - [RaDe-GS: Rasterizing Depth in Gaussian Splatting](sources/ra-de-gs.md) — 在 3D-GS 上栅格化深度与法线，DTU CD 0.68mm 媲美 Neuralangelo，训练 8.3 分钟
 - [CGVQM: Computer Graphics Video Quality Metric](sources/cgvqm.md) — Intel Labs 全参考视频质量指标，针对渲染失真校准，配套 CGVQD 数据集
 
-- [World Tracing](sources/world-tracing-generative-pixel-aligned-geometry-beyond-the-visible) — 像素对齐多层几何扩散，单图生成完整3D场景（可见+遮挡），SOTA 几何 F1
+
+- [8DNA: 8D Neural Asset Light Transport by Distribution Learning](sources/8dna-8d-neural-asset-light-transport-by-distribution-learning.md)
+- [A Generalizable Light Transport 3D Embedding for Global Illumination](sources/a-generalizable-light-transport-3d-embedding-for-global-illumination.md)
+- [A LoD of Gaussians: Unified Training and Rendering for Ultra-Large Scale Reconstruction with External Memory](sources/a-lod-of-gaussians.md)
+- [Adaptive Shells for Efficient Neural Radiance Field Rendering](sources/adaptive-shells.md)
+- [Arm Neural Super Sampling (NSS)](sources/arm-neural-super-sampling.md)
+- [Arm Neural Technology for Mobile Games](sources/arm-neural-technology-for-mobile-games.md)
+- [Bake It Till You Make It: Ultrafast Spatial Texture-Atlas Splatting](sources/bake-it-till-you-make-it.md)
+- [Extracting Neural Materials from Multi-view Images](sources/extracting-neural-materials-from-multi-view-images.md)
+- [AMD FidelityFX Super Resolution (FSR 1.0)](sources/fidelityfx-fsr-1.md)
+- [GLINT: Modeling Scene-Scale Transparency via Gaussian Radiance Transport](sources/glint-modeling-scene-scale-transparency-via-gaussian-radiance-transport.md)
+- [GlossyGS: Inverse Rendering of Glossy Objects with 3D Gaussian Splatting](sources/glossygs-inverse-rendering-of-glossy-objects-with-3d-gaussian-splatting.md)
+- [GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction](sources/gs-2m.md)
+- [1.5万字速通LLM主流模型结构（Llama、Qwen、GLM、Deepseek...）](sources/llm-architecture-overview.md)
+- [Mobile-GS: Real-time Gaussian Splatting for Mobile Devices](sources/mobilegs-real-time-gaussian-splatting-for-mobile-devices.md)
+- [NeuMatEx: Extracting Neural Materials from Multi-view Images](sources/neumatex.md)
+- [Neural Harmonic Textures for High-Quality Primitive Based Neural Reconstruction](sources/neural-harmonic-textures.md)
+- [Proxy-GS: Unified Occlusion Priors for Training and Inference in Structured 3D Gaussian Splatting](sources/proxy-gs.md)
+- [RadiosityGS: Differentiable Light Transport with Gaussian Surfels via Adapted Radiosity for Efficient Relighting and Geometry Reconstruction](sources/radiositygs-differentiable-light-transport-with-gaussian-surfels.md)
+- [Rectified Flow](sources/rectified-flow.md)
+- [Ref-DGS: Reflective Dual Gaussian Splatting](sources/ref-dgs.md)
+- [Ref-GS: Directional Factorization for 2D Gaussian Splatting](sources/ref-gs-directional-factorization-for-2d-gaussian-splatting.md)
+- [SDFRaster: Distance Field Rasterization for End-to-End Mesh Reconstruction](sources/sdfraster.md)
+- [Snapdragon Game Super Resolution (SGSR)](sources/snapdragon-gsr.md)
+- [Sparse Voxels Rasterization: Real-time High-fidelity Radiance Field Rendering](sources/sparse-voxels-rasterization.md)
+- [Spherical Voronoi Directional Appearance as a Differentiable Partition of the Sphere](sources/spherical-voronoi-directional-appearance.md)
+- [STREAM3D: Generating 3D Meshes from Videos](sources/stream3d-generating-3d-meshes-from-videos.md)
+- [SuGaR: Surface-Aligned Gaussian Splatting for Efficient 3D Mesh Reconstruction and High-Quality Mesh Rendering](sources/su-ga-r.md)
+- [Surflo: Consistent 3D Surface Flow Model with Global State](sources/surflo.md)
+- [TopoMesh: High-Fidelity Mesh Autoencoding via Topological Unification](sources/topomesh.md)
+- [Toward Richer Material Generation via Procedural Data Enhancement](sources/toward-richer-material-generation-via-procedural-data-enhancement.md)
+- [TransGI: Real-Time Dynamic Global Illumination With Object-Centric Neural Transfer Model](sources/transgi.md)
+- [TransparentGS: Fast Inverse Rendering of Transparent Objects with Gaussians](sources/transparent-gs-fast-inverse-rendering-of-transparent-objects-with-gaussians.md)
+- [Volumetric Surfaces: Representing Fuzzy Geometries with Layered Meshes](sources/volumetric-surfaces.md)
+- [World Tracing: Generative Pixel-Aligned Geometry Beyond the Visible](sources/world-tracing.md)
+
+
+
 ## Papers
 - [TransparentGS: Fast Inverse Rendering of Transparent Objects with Gaussians](sources/transparent-gs-fast-inverse-rendering-of-transparent-objects-with-gaussians) — 3D-GS 透明物体逆向渲染：透明高斯基元 + 延迟折射 + 高斯光场探针
 - [A LoD of Gaussians](sources/a-lod-of-gaussians) — 消费级 GPU 城市级 3DGS 无分块训练：核外存储 + HSPT + 流式渲染
@@ -52,7 +89,42 @@ This file is maintained by the LLM. Updated on every ingest.
 - [A Generalizable Light Transport 3D Embedding for Global Illumination](sources/a-generalizable-light-transport-3d-embedding-for-global-illumination) — 可泛化全局光照：点云 + 线性 Transformer + 局部解码，14k 室内场景基准
 ## Entities
 
+
+- [Andreatagliasacchi](entities/AndreaTagliasacchi.md)
+- [Antoine Guedon](entities/AntoineGuedon.md)
+- [ARM](entities/Arm.md)
+- [Francescodisario](entities/FrancescoDiSario.md)
+- [Meta Reality Labs](entities/MetaRealityLabs.md)
+- [Neel Kelkar](entities/NeelKelkar.md)
+- [NVIDIA](entities/NVIDIA.md)
+- [Stefano Esposito](entities/StefanoEsposito.md)
+- [University of Tübingen](entities/UniversityOfTübingen.md)
+- [Vincent Lepetit](entities/VincentLepetit.md)
+
 ## Concepts
+
+
+- [Across-Probe Radiance Sharing](concepts/AcrossProbeRadianceSharing.md)
+- [Dual Gaussian Splatting](concepts/DualGaussianSplatting.md)
+- [Gaussian Depth Map Level Set Sampling](concepts/GaussianDepthMapLevelSet.md)
+- [Hi-Z (Hierarchical Z-buffer)](concepts/HiZ.md)
+- [k-SDF](concepts/KSDF.md)
+- [Mesh-Bound Gaussians](concepts/MeshBoundGaussians.md)
+- [Mixed-Resolution Textures](concepts/MixedResolutionTextures.md)
+- [Neural Material](concepts/NeuralMaterial.md)
+- [Neural Material Extraction](concepts/NeuralMaterialExtraction.md)
+- [Neural Radiance Fields](concepts/NeuralRadianceFields.md)
+- [Neural Super Sampling](concepts/NeuralSuperSampling.md)
+- [Object-Centric Neural Transfer](concepts/ObjectCentricNeuralTransfer.md)
+- [遮挡剔除](concepts/OcclusionCulling.md)
+- [Physically-Aware Specular Adaptive Mixing Shader](concepts/PhysicallyAwareSpecularShader.md)
+- [Rectified Flow](concepts/RectifiedFlow.md)
+- [Shell Rendering](concepts/ShellRendering.md)
+- [Signed Distance Function](concepts/SignedDistanceFunction.md)
+- [Sphericalvoronoi](concepts/SphericalVoronoi.md)
+- [Surface-Aligned Gaussian Splatting](concepts/SurfaceAlignedGaussianSplatting.md)
+- [Texture Atlas Baking](concepts/TextureAtlasBaking.md)
+- [Voronoilightprobes](concepts/VoronoiLightProbes.md)
 
 ## Issues
 - [issues](issues.md) — pending entities, phantom links, contradictions
